@@ -2,8 +2,6 @@
 Methods for processing of data acquired in automated high-throughput phenotyping system at 
 [The Plant Accelerator®](https://plantphenomics.org.au/services/accelerator/)
 
-![alt text](https://github.com/FCTanner/ab_hsi_phenotyping/blob/main/visualize_spectrum/out/2021_mean_smoothed_ref_21DAI.pdf)
-
 ## Description
 
 Code and data underlying ==thesis chapter in:== 
