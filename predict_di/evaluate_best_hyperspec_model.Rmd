@@ -1,0 +1,260 @@
+---
+title: "Predict disease index hyperspectral data cross-validation"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+.libPaths("C:/R-packages2")
+rm(list=ls())
+```
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(tidymodels)
+library(prospectr)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load data
+
+```{r}
+hyperspec_full_2020 <- read_csv("../pre_processing/hyperspectral/out/2020/raw_and_smoothed_full.csv")
+hyperspec_full_2021 <- read_csv("../pre_processing/hyperspectral/out/2021/raw_and_smoothed_full.csv")
+scores_2020 <- read_csv("../raw_data/scores/scores_2020.csv") 
+scores_2021 <- read_csv("../raw_data/scores/scores_2021.csv") 
+```
+
+### Function to prepare dataset for modeling
+
+
+```{r}
+prep_dataset <- function(dataset = hyperspec_full, 
+                         alive_only = TRUE, 
+                         response_chr = "reflectance_raw", 
+                         VNIR_only = TRUE, 
+                         set_date = as.Date("2020-06-02"),
+                         normalization = "Pu", 
+                         derivative = "None",
+                         gapDer_wl = 11,
+                         gapDer_seg = 9,
+                         scores = scores_2020){
+  
+  # Combine with scores and pot ids
+  dat <- dataset |>
+    rename(imaging_date = date) |> # do not use function names as variable names
+    left_join(scores) |> 
+    dplyr::filter(imaging_date == set_date,
+           treatment != "Control") |> 
+    rename(pot = id_tag)
+  
+  try(dat <- dat |> rename(wavelength = wavelength_bin)) # Rename var for the binned datasets
+  
+  # Subset
+  if(alive_only == TRUE){
+    dat <- dat |> filter(di < 100)
+  }else{
+    dat <- dat
+  }
+  if(VNIR_only == TRUE){
+    dat <- dat |>  filter(camera == "VNIR")
+  }else{
+    dat <- dat
+  }
+  
+  # Pre-processing
+  
+  ## Normalization
+  if(normalization == "Pu"){
+    pots <- unique(dat$pot)
+    pot_summary <- data.frame(pot = character(),
+                              avg_ref_per_curve = numeric())
+    for(p in pots){ # Summarizing reflectance per pot
+      pot_subset <- dat[dat$pot == p,]
+      list_of_response <- pot_subset |> pull(response_chr)
+      pot_mean <- mean(list_of_response, na.rm = TRUE)
+      p_summary <- data.frame(pot = p, avg_ref_per_curve = as.numeric(pot_mean))
+      
+      pot_summary <- rbind(pot_summary, p_summary)
+    }
+    dat <- dat |> 
+      left_join(pot_summary) 
+    response_num <- dat |> pull(response_chr)
+    
+    dat$response <- response_num/dat$avg_ref_per_curve
+  }else if(normalization == "None"){
+    dat <- dat
+    dat$response <- dat |> pull(response_chr)
+  }else{
+    dat <- dat
+    dat$response <- dat |> pull(response_chr)
+  }
+  
+  
+  ## Calculate derivatives 
+  
+  # Cast wide
+  dat <- dat |>  
+    pivot_wider(id_cols = c(pot, di), values_from = response, 
+                names_from = wavelength,values_fn = mean)
+  
+  # Calculate lagged Differences (derivatives), adjust lag depending on binning
+  if(derivative == "None"){
+    dat <- dat
+    
+  }else if(derivative == "First"){
+    hyper_mat <- as.matrix(dat[ , !names(dat) %in% c("pot","di")])
+    hyper_id <- as.matrix(dat[ , names(dat) %in% c("pot","di")])
+    
+    gds1 <- gapDer(X = hyper_mat, m = 1, w = gapDer_wl, s = gapDer_seg)
+
+    dat <- data.frame(hyper_id, gds1, check.names = FALSE)
+    dat$di <- as.numeric(dat$di)
+    
+  }else if(derivative == "Second"){
+    hyper_mat <- as.matrix(dat[ , !names(dat) %in% c("pot","di")])
+    hyper_id <- as.matrix(dat[ , names(dat) %in% c("pot","di")])
+    
+    gds2 <- gapDer(X = hyper_mat, m = 2, w = gapDer_wl, s = gapDer_seg)
+    
+    dat <- data.frame(hyper_id, gds2, check.names = FALSE)
+    dat$di <- as.numeric(dat$di)
+    
+  }else{
+    stop('Derivative needs to be "None", "First", or "Second"')
+  }
+  return(dat)
+}
+```
+
+# 2020 → 2021
+
+## Fit final model to 2020 data (choose best one in meta_analysis_predict_di)
+
+```{r}
+data_2020_best_process_2020 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-06-09"),
+                                       normalization = "Pu",
+                                       derivative = "Second",
+                                       scores = scores_2020)
+```
+
+```{r}
+ref_recipe_2020 <- recipe((di ~ .), 
+                     data = data_2020_best_process_2020)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+rf_spec_2020 <- rand_forest() |> 
+  set_engine("ranger") |> 
+  set_mode("regression") |> 
+  translate()
+
+rf_wf_2020 <- workflow() |> 
+  add_model(rf_spec_2020) |> 
+  add_recipe(ref_recipe_2020)
+
+set.seed(seed = 123)
+data_2020_best_process_2020_fit <- rf_wf_2020 |> fit(data_2020_best_process_2020)
+```
+
+## Predict on 2021 data
+
+```{r}
+data_2021_best_process_2020 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-06-15"),
+                                       normalization = "Pu",
+                                       derivative = "Second",
+                                       scores = scores_2021)
+
+colnames(data_2021_best_process_2020) <- colnames(data_2020_best_process_2020)
+```
+
+```{r}
+hyper_rf_pred_2021 <- predict(data_2020_best_process_2020_fit, data_2021_best_process_2020) |> 
+  bind_cols(data_2021_best_process_2020) |> 
+  select(.pred, di, pot) |> 
+  rename(hyper_rf_pred = .pred)
+
+write_csv(hyper_rf_pred_2021, "out/predictions/hyper_rf_pred_2021.csv")
+```
+
+# 2021 → 2020
+
+## Fit final model to 2021 data (choose best one in meta_analysis_predict_di)
+
+```{r}
+data_2021_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-06-15"),
+                                       normalization = "None",
+                                       derivative = "First",
+                                       scores = scores_2021)
+```
+
+```{r}
+ref_recipe_2021 <- recipe((di ~ .), 
+                     data = data_2021_best_process_2021) |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) |> 
+  step_pls(all_predictors(), outcome = "di", num_comp = 6)
+
+linreg_spec <- linear_reg() |> # For PLSR
+  set_engine("lm")
+
+plsr_wf_2021 <- workflow() |>
+    add_model(linreg_spec) |>
+    add_recipe(ref_recipe_2021)
+
+set.seed(seed = 123)
+data_2021_best_process_2021_fit <- plsr_wf_2021 |> fit(data_2021_best_process_2021)
+```
+
+## Predict on 2020 data
+
+```{r}
+data_2020_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-06-09"),
+                                       normalization = "None",
+                                       derivative = "First",
+                                       scores = scores_2020)
+
+colnames(data_2020_best_process_2021) <- colnames(data_2021_best_process_2021)
+```
+
+```{r}
+hyper_plsr_pred_2020 <- predict(data_2021_best_process_2021_fit, data_2020_best_process_2021) |> 
+  bind_cols(data_2020_best_process_2021) |> 
+  select(.pred, di, pot) |> 
+  rename(hyper_plsr_pred = .pred)
+
+write_csv(hyper_plsr_pred_2020, "out/predictions/hyper_plsr_pred_2020.csv")
+```
+
+
+
+
+```{r}
+sessionInfo()
+```

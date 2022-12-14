@@ -1,0 +1,23 @@
+\captionsetup[table]{labelformat=empty,skip=1pt}
+\begin{longtable}{llllllll}
+\toprule
+Binning & Smoothing & Sensors & Normalization & Derivative & Model & RMSE 2020 & RMSE 2021 \\ 
+\midrule
+\multicolumn{1}{l}{Best algorithms 2020} \\ 
+\midrule
+Full spectrum & Raw & VNIR only & Pu & Second & RF & 6.44 ± 1.83 & 12.72 ± 2.16 \\ 
+Full spectrum & Raw & VNIR + SWIR & Pu & None & RF & 6.47 ± 1.7 & 13.58 ± 3 \\ 
+Full spectrum & Smoothed & VNIR + SWIR & Pu & None & RF & 6.53 ± 1.7 & 13.46 ± 3.03 \\ 
+Full spectrum & Raw & VNIR only & None & Second & RF & 6.55 ± 1.69 & 14.02 ± 2.02 \\ 
+FWHM binned & Raw & VNIR + SWIR & Pu & None & RF & 6.58 ± 1.78 & 13.41 ± 2.9 \\ 
+\midrule
+\multicolumn{1}{l}{Best algorithms 2021} \\ 
+\midrule
+Double FWHM binned & Raw & VNIR only & None & First & PLSR & 7.34 ± 1.75 & 11.77 ± 2.25 \\ 
+Full spectrum & Raw & VNIR only & Pu & First & RF & 6.89 ± 1.9 & 12.18 ± 2.16 \\ 
+Double FWHM binned & Raw & VNIR only & Pu & First & PLSR & 6.97 ± 2.27 & 12.2 ± 2.28 \\ 
+FWHM binned & Raw & VNIR only & Pu & First & PLSR & 7.99 ± 2.66 & 12.38 ± 3.03 \\ 
+FWHM binned & Raw & VNIR only & Pu & First & RF & 6.89 ± 1.89 & 12.39 ± 2.25 \\ 
+\bottomrule
+\end{longtable}
+

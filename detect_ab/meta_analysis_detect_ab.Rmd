@@ -1,0 +1,348 @@
+---
+title: "Meta analysis detect AB"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+rm(list=ls())
+```
+
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(gt)
+library(patchwork)
+library(yardstick)
+`%nin%` <- negate(`%in%`)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Hyperspec
+
+## Load data
+
+### Hyperspec CV metrics
+
+```{r}
+hyper_metrics_2020 <- read_csv("out/hyperspectral_detect_cv_metrics_2020.csv") |> 
+  mutate(study = "2020",
+         DAI = as.numeric(as.Date(imaging_date) - as.Date("2020-05-12")))
+hyper_metrics_2021 <- read_csv("out/hyperspectral_detect_cv_metrics_2021.csv") |> 
+  mutate(study = "2021",
+         DAI = as.numeric(as.Date(imaging_date) - as.Date("2021-05-25")))
+```
+
+### Final fit predictions
+
+```{r}
+# lemna_final_fit_predictions_2021 <- read_csv("out/predictions/lemna_predictions_2021.csv")
+# hyper_final_fit_predictions_2021 <- read_csv("out/predictions/hyper_rf_pred_2021.csv")
+```
+
+
+## Clean hyperspec metrics 
+
+
+```{r}
+hyper_metrics_clean <- hyper_metrics_2021 |> 
+  bind_rows(hyper_metrics_2020) |>
+  mutate(grouping = str_c(study,  DAI, VNIR_only, dataset, normalization, derivative, model, "-", response, sep = " "),
+         response = str_remove(response, "reflectance_"),
+         description = str_c(study, DAI, model, "-", response, normalization, derivative, sep = " "),
+         sorting_hat = str_c(study, DAI, VNIR_only, dataset, sep = " ")) |> 
+  group_by(grouping, .metric)  |> 
+  summarise(mean_metric = round(mean(.estimate), 2),
+         sd_metric  = round(sd(.estimate), 2),
+         n_cv_folds = n(), # Checking that 25 folds exist
+         study = study,
+         dataset = dataset,
+         response = response,
+         VNIR_only = VNIR_only,
+         sorting_hat = sorting_hat,
+         DAI = DAI, 
+         description = description,
+         normalization = normalization, 
+         derivative = derivative,
+         model = model) |>
+  distinct() |> 
+  ungroup() |> 
+  pivot_wider(values_from = c(mean_metric, sd_metric), names_from = .metric) |> 
+  group_by(sorting_hat)
+```
+# Todos 
+
+Test whether better than random prediction
+
+
+## Table version of metrics
+
+```{r, width = 8}
+wide_hyper_metrics <- hyper_metrics_clean |> 
+  ungroup() |>
+  select(dataset, response, VNIR_only, normalization, derivative, model, mean_metric_accuracy, sd_metric_accuracy, study, DAI) |> 
+  pivot_wider(names_from = study, values_from = c(mean_metric_accuracy, sd_metric_accuracy)) 
+```
+
+```{r}
+best_algorithms <- hyper_metrics_clean |> 
+  filter(DAI <= 21) |> 
+  group_by(DAI, study) |> 
+  slice_max(mean_metric_accuracy, n= 1, with_ties = F) 
+
+p_cv_accuracy <- best_algorithms |> 
+  ggplot(aes(x = DAI, y = mean_metric_accuracy, 
+             ymin = mean_metric_accuracy - sd_metric_accuracy, 
+             ymax = mean_metric_accuracy + sd_metric_accuracy)) +
+  geom_hline(yintercept = 0.5, linetype = 2, color = "#52AD9C") +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
+  scale_x_continuous(breaks = c(0,7,14,21)) +
+  geom_point() +
+  geom_errorbar() +
+  facet_wrap(~study) +
+  labs(y = "Accuracy") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
+
+p_cv_accuracy
+```
+
+
+Interesting part: 
+Accuracy 2 DAI in both years
+
+
+```{r}
+ggsave(plot= p_cv_accuracy, filename = "out/graphs/p_cv_accuracy.pdf", device = "pdf", units = "cm", height = 8, width = 12,
+       scale = 1.3)
+```
+
+## Better than random prediction? 
+
+### Simulate random draw
+
+2020: 50 samples, 25 infected, 25 non-infected -> 10 samples in CV
+2021: 84 samples, 42 infected, 42 non-infected -> 16 samples in CV
+Random classifier
+5-fold CV 5 repeats
+Get accuracies
+
+```{r}
+sample_data <- data.frame(id = seq(1,40,1), treatment = rep(c("Infected", "Non-infected"), 20))
+random_accuracies <- numeric()
+for(i in 1:25){
+  set.seed(i)
+  rand_treatment <- sample_data$treatment[sample(1:nrow(sample_data))]
+  accuracy <- mean(sample_data$treatment == rand_treatment)
+  random_accuracies[i] <- accuracy
+}
+```
+
+```{r}
+sample_data_2020 <- data.frame(id = seq(1,10,1), treatment = rep(c("Infected", "Non-infected"), 5))
+random_accuracies_2020 <- numeric()
+for(i in 1:25){
+  set.seed(i)
+  rand_treatment_2020 <- sample_data_2020$treatment[sample(1:nrow(sample_data_2020))]
+  accuracy_2020 <- mean(sample_data_2020$treatment == rand_treatment_2020)
+  random_accuracies_2020[i] <- accuracy_2020
+}
+```
+
+```{r}
+sample_data_2021 <- data.frame(id = seq(1,16,1), treatment = rep(c("Infected", "Non-infected"), 8))
+random_accuracies_2021 <- numeric()
+for(i in 1:25){
+  set.seed(i)
+  rand_treatment_2021 <- sample_data_2021$treatment[sample(1:nrow(sample_data_2021))]
+  accuracy_2021 <- mean(sample_data_2021$treatment == rand_treatment_2021)
+  random_accuracies_2021[i] <- accuracy_2021
+}
+```
+
+
+### t-test to actual accuracies
+
+```{r}
+cv_accuracies <- hyper_metrics_2021 |> 
+  bind_rows(hyper_metrics_2020) |>
+  mutate(grouping = str_c(study,  DAI, VNIR_only, dataset, normalization, derivative, model, "-", response, sep = " ")) |> 
+  filter(.metric == "accuracy")
+
+all_models_accuracy_comp <- data.frame(grouping = unique(cv_accuracies$grouping), p_val = 1)
+
+for(i in 1:nrow(all_models_accuracy_comp)){
+  subset_grouping <- all_models_accuracy_comp$grouping[i]
+  real_accuracies <- cv_accuracies |> 
+    filter(grouping == subset_grouping) |> 
+    pull(.estimate)
+  p_val <- t.test(x = real_accuracies, y = random_accuracies)$p.value
+  all_models_accuracy_comp$p_val[i] <- p_val
+}
+```
+
+```{r}
+all_models_accuracy_comp_2020 <- data.frame(grouping = unique(cv_accuracies$grouping), p_val = 1) |> 
+  filter(str_detect(grouping, "2020"))
+
+all_models_accuracy_comp_2021 <- data.frame(grouping = unique(cv_accuracies$grouping), p_val = 1) |> 
+  filter(str_detect(grouping, "2021"))
+
+for(i in 1:nrow(all_models_accuracy_comp_2020)){
+  subset_grouping_2020 <- all_models_accuracy_comp_2020$grouping[i]
+  real_accuracies <- cv_accuracies |> 
+    filter(grouping == subset_grouping_2020) |> 
+    pull(.estimate)
+  p_val <- t.test(x = real_accuracies, y = random_accuracies_2020)$p.value
+  all_models_accuracy_comp_2020$p_val[i] <- p_val
+}
+
+for(i in 1:nrow(all_models_accuracy_comp_2021)){
+  subset_grouping_2021 <- all_models_accuracy_comp_2021$grouping[i]
+  real_accuracies <- cv_accuracies |> 
+    filter(grouping == subset_grouping_2021) |> 
+    pull(.estimate)
+  p_val <- t.test(x = real_accuracies, y = random_accuracies_2021)$p.value
+  all_models_accuracy_comp_2021$p_val[i] <- p_val
+}
+```
+
+
+
+## Table of cv metrics
+
+```{r}
+t_cv_accuracy <- best_algorithms |> 
+  ungroup() |> 
+  left_join(bind_rows(all_models_accuracy_comp_2020, all_models_accuracy_comp_2021)) |> 
+  mutate(Accuracy = paste(mean_metric_accuracy,  "\u00b1", sd_metric_accuracy),
+         response = stringr::str_to_title(response),
+         p_val_format =  finalfit::p_tidy(p_val, digits = 3)) |> 
+  select(DAI, dataset, response, VNIR_only,  normalization, derivative, model, Accuracy, p_val_format, study) |> 
+  group_by(study) |> 
+  gt() |> 
+  cols_label(dataset = "Binning",
+             response = "Smoothing",
+             VNIR_only = "Sensors",
+             normalization = "Normalization",
+             derivative = "Derivative",
+             model = "Model",
+             Accuracy = "Accuracy",
+             p_val_format = "P-value")
+
+  
+t_cv_accuracy
+gtsave(t_cv_accuracy, "out/tables/t_cv_accuracy.tex")
+```
+
+```{r}
+best_algorithms |> 
+  group_by(study) |> 
+  summarise(mean_acc = mean(mean_metric_accuracy))
+```
+```{r}
+test <- hyper_metrics_clean |> 
+  filter(study == 2021, 
+         DAI == 2) |> 
+  arrange(desc(mean_metric_accuracy))
+```
+
+
+# Deprecated
+
+## Evaluate final fits
+
+```{r}
+# final_predictions_2021<- lemna_final_fit_predictions_2021 |> 
+#   select(di, linreg_pred, rf_pred, plotId ) |> 
+#   rename(pot = plotId) |> 
+#   left_join(hyper_final_fit_predictions_2021 |> select(di, hyper_rf_pred, pot), by = "pot")
+```
+
+```{r}
+# pred_metrics_2021 <- final_predictions_2021 |> 
+#   metrics(truth = di.x, estimate = rf_pred) |> 
+#   mutate(model = "RGB Random Forest") |> 
+#   bind_rows(final_predictions_2021 |> 
+#   metrics(truth = di.x, estimate = linreg_pred) |> 
+#   mutate(model = "RGB Linear Regression")) |> 
+#   bind_rows(final_predictions_2021 |> 
+#   metrics(truth = di.x, estimate = hyper_rf_pred) |> 
+#   mutate(model = "Hyperspectral Random Forest")) |> 
+#   filter(.metric != "mae") |> 
+#   mutate(.estimate = round(.estimate, 2),
+#          .metric = toupper(.metric)) |> 
+#   pivot_wider(values_from= .estimate, names_from = .metric, id_cols = -.estimator) |> 
+#   rename(Model = model) 
+#   
+# pred_metrics_2021 |> 
+#   gt() |> 
+#   gtsave("out/table/final_fit_2021_metrics.tex")
+```
+
+
+## Plot final predictions
+
+```{r}
+# color_palette <- paletteer::paletteer_d("ggprism::colorblind_safe", 3)
+# color_palette 
+```
+
+
+```{r}
+# p_hyper_rf <- final_predictions_2021 |> 
+#   ggplot(aes(x = di.x, y = hyper_rf_pred)) +
+#   geom_point(color = color_palette[1], shape = 1) +
+#   labs(x = "Disease Index", y = "Predicted index\nHyperspectral random forest model") +
+#   scale_y_continuous(limits = c(0, 80)) +
+#   scale_x_continuous(limits = c(0,80)) +
+#   annotate(geom = "text", x = 10, y = 70, label = "RMSE = 21.08\nRsq = 0.02", hjust = 0) 
+# 
+# p_hyper_rf
+```
+
+```{r}
+# p_rgb_rf <- final_predictions_2021 |> 
+#   ggplot(aes(x = di.x, y = rf_pred)) +
+#   geom_point(color = color_palette[2], shape = 2) +
+#   labs(x = "Disease Index", y = "Predicted index\nRGB random forest model") +
+#   scale_y_continuous(limits = c(0, 80)) +
+#   scale_x_continuous(limits = c(0,80))+
+#   annotate(geom = "text", x = 10, y = 70, label = "RMSE = 19.21\nRsq = 0.30", hjust = 0) 
+# 
+# p_rgb_rf
+```
+```{r}
+# p_rgb_linreg <- final_predictions_2021 |> 
+#   ggplot(aes(x = di.x, y = linreg_pred)) +
+#   geom_point(color = color_palette[3], shape = 3) +
+#   labs(x = "Disease Index", y = "Predicted index\nRGB linear regression model") +
+#   scale_y_continuous(limits = c(0, 80)) +
+#   scale_x_continuous(limits = c(0,80))+
+#   annotate(geom = "text", x = 10, y = 70, label = "RMSE = 12.43\nRsq = 0.64", hjust = 0) 
+# 
+# p_rgb_linreg
+```
+
+
+```{r}
+# p_predictions <- p_hyper_rf + p_rgb_rf + p_rgb_linreg + plot_layout(nrow = 1)
+# p_predictions
+# ggsave(plot = p_predictions, "out/graphs/final_fit_predictions_2021.pdf",device = "pdf", units = "cm", width = 12, height = 4.2, limitsize = F, scale = 1.7)
+```
+
+
+
+### Session info
+```{r}
+sessionInfo()
+```

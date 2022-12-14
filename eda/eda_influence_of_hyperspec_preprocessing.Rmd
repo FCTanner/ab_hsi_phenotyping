@@ -1,0 +1,138 @@
+---
+title: "Examine influence of preprocessing and learning algorithms for hyperspectral data for the greenhouse"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+rm(list=ls())
+`%nin%` = Negate(`%in%`)
+```
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(patchwork)
+library(broom)
+library(gt)
+```
+
+## Load data
+
+### Regression
+
+
+```{r}
+cv_regression_results_full_spectrum_2020 <- read_csv("../predict_di/out/hyperspectral_cv_metrics_2020.csv")
+cv_regression_results_full_spectrum_2021 <- read_csv("../predict_di/out/hyperspectral_cv_metrics_2021.csv")
+```
+
+```{r}
+grouping_vars <- c(quo(model), quo(response), quo(VNIR_only), quo(normalization), quo(derivative), quo(dataset))
+```
+## 2020 regression
+
+```{r}
+mod_2020_reg <- lm(.estimate ~ model +response + VNIR_only + normalization + derivative + dataset , data = cv_regression_results_full_spectrum_2020 |> filter(.metric == "rmse"))
+
+anova(mod_2020_reg)
+```
+
+
+
+```{r}
+reg_2020_df_list <- list() 
+
+
+for (i in seq_along(grouping_vars)) {
+  print(i)
+  df <- cv_regression_results_full_spectrum_2020 |> 
+    filter(.metric == "rmse") |> 
+    rename(instance = !!grouping_vars[[i]]) |> 
+    group_by(instance) |> # Unquote with !!
+    summarise(mean_metric = mean(.estimate),
+              sd_metric = sd(.estimate)) |> 
+    arrange(mean_metric) |> 
+    mutate(print_for_latex = str_c("$", round(mean_metric, 2), " replace_this_with_pm ", round(sd_metric, 2), "$", sep = "")) %>%
+    mutate(variable = quo_name(grouping_vars[[i]]),
+           metric = "rmse",
+           instance = as.character(instance)) 
+  
+  reg_2020_df_list[[i]] <- df
+}
+```
+## 2021 regression
+
+```{r}
+mod_2021_reg <- lm(.estimate ~ model +response + VNIR_only + normalization + derivative + dataset , data = cv_regression_results_full_spectrum_2021 |> filter(.metric == "rmse"))
+
+anova(mod_2021_reg)
+```
+
+```{r}
+reg_2021_df_list <- list() 
+
+
+for (i in seq_along(grouping_vars)) {
+  print(i)
+  df <- cv_regression_results_full_spectrum_2021 |> 
+    filter(.metric == "rmse") |> 
+    rename(instance = !!grouping_vars[[i]]) |> 
+    group_by(instance) |> # Unquote with !!
+    summarise(mean_metric = mean(.estimate),
+              sd_metric = sd(.estimate)) |> 
+    arrange(mean_metric) |> 
+    mutate(print_for_latex = str_c("$", round(mean_metric, 2), " replace_this_with_pm ", round(sd_metric, 2), "$", sep = "")) %>%
+    mutate(variable = quo_name(grouping_vars[[i]]),
+           metric = "rmse",
+           instance = as.character(instance)) 
+  
+  reg_2021_df_list[[i]] <- df
+}
+```
+
+```{r}
+cv_metrics_table <- reg_2020_df_list |> 
+  bind_rows() |> 
+  mutate(models = "reg_2020") |> 
+  bind_rows(reg_2021_df_list |> 
+              bind_rows() |> 
+              mutate(models = "reg_2021")) |>
+  mutate(Step = case_when(variable == "model" ~ "Learning algorithm",
+                          variable == "response" ~ "Smoothing",
+                          variable == "VNIR_only" ~ "VNIR + SWIR",
+                          variable == "normalization" ~ "Normalization",
+                          variable == "derivative"~ "Derivation",
+                          variable == "dataset" ~ "Binning"),
+         instance_renamed = case_when(instance == "reflectance_raw" ~ "Raw",
+                                      instance == "reflectance_smoothed" ~ "Smoothed",
+                                      instance == "FALSE" ~ "VNIR + SWIR",
+                                      instance == "TRUE" ~ "VNIR only",
+                                      TRUE ~ instance)) |> 
+  pivot_wider(id_cols = c(Step, instance_renamed), names_from = models, values_from = print_for_latex) |>
+
+  group_by(Step) |> 
+  arrange(instance_renamed) |> 
+  relocate(instance_renamed,reg_2020, reg_2021) |> 
+  gt() |> 
+    cols_label(instance_renamed = "Pipeline Step",
+               reg_2020 = "Reg. 2020 RMSE",
+               reg_2021 = "Reg. 2021 RMSE")
+  
+```
+
+```{r}
+cv_metrics_table
+
+gtsave(data = cv_metrics_table, filename = "out/metrics/full_hyperspec_cv_metrics_greenhouse.tex")
+```
+
+
+
+```{r}
+sessionInfo()
+```

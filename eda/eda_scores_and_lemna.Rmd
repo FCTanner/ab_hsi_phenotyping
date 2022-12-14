@@ -1,0 +1,186 @@
+---
+title: "EDA Scores and LemnaTec results"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+rm(list=ls())
+```
+
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+`%nin%` <- negate(`%in%`)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+color_palette <- paletteer::paletteer_d(`"basetheme::clean"`, 2)
+```
+
+
+# Load data
+
+## Load LemnaTec results
+
+```{r}
+lemna_2020 <- readxl::read_excel("../raw_data/lemnatec/2020/0521_Chickpea Florian_rawdata(1)_20200611.xlsx", sheet = "rawdata") |> janitor::clean_names()
+lemna_2021 <- readxl::read_excel("../raw_data/lemnatec/2021/0588 Chickpea Florian rawdata(1)_20210623.xlsx", sheet = "rawdata")|> janitor::clean_names()
+```
+
+## Load scores
+
+```{r}
+scores_2020 <- read_csv("../raw_data/scores/scores_2020.csv")
+scores_2021 <- read_csv("../raw_data/scores/scores_2021.csv")
+```
+## Set DAI
+
+```{r}
+inoc_date_2020 <- as.Date("2020-05-12")
+inoc_date_2021 <- as.Date("2021-05-25")
+```
+
+## Clean data
+
+```{r}
+data_2020 <- lemna_2020 |> 
+  rename(id_tag = snapshot_id_tag) |> 
+  select(-treatment, -lane, -position) |> 
+  left_join(scores_2020, by = "id_tag") |> 
+  select(id_tag, treatment, id_with_controls, position, lane, di, snapshot_time_stamp,projected_shoot_area_pixels, rgb_tv_result_area) |> 
+  filter(!is.na(treatment)) |> 
+  mutate(dai = as.numeric(difftime(as.Date(snapshot_time_stamp), inoc_date_2020, unit = "days")),
+         experiment  = "2020")
+```
+
+```{r}
+data_2021 <- lemna_2021 |> 
+  rename(id_tag = snapshot_id_tag) |> 
+  select(-inoculant, -lane, -position) |>
+  left_join(scores_2021, by = "id_tag") |> 
+  select(id_tag, treatment, id_with_controls, position, lane, di, snapshot_time_stamp,projected_shoot_area_pixels, rgb_tv_result_area) |> 
+  filter(!is.na(treatment)) |> 
+  mutate(dai = as.numeric(difftime(as.Date(snapshot_time_stamp), inoc_date_2021, unit = "days")),
+         experiment  = "2021")
+```
+
+```{r}
+lemna_data <- rbind(data_2020, data_2021) |> 
+  mutate(treatment = case_when(treatment == "16CUR018" ~ "Infected",
+                               TRUE ~ "Control"))
+```
+
+## Visualize LemnaTec results 
+
+### PSA
+
+```{r, fig.height =5}
+p_psa <- lemna_data |> 
+  filter(dai <= 21) |> 
+  ggplot(aes(x = dai, y = projected_shoot_area_pixels/100000, color = treatment, shape = treatment)) +
+  geom_point(alpha = 0.7, size = 0.5) +
+  geom_line(aes(group = id_tag), alpha = 0.5, size = 0.35) +
+  # geom_smooth(se = F) +
+  scale_color_manual(values = color_palette) +
+  scale_x_continuous(breaks = c(0,7,14,21)) +
+  scale_y_continuous(labels = scales::comma) +
+  facet_grid(experiment~id_with_controls) +
+  labs(y = "Projected shoot area (pixels)\nx 100000", x = "Days after infection") +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
+
+p_psa
+```
+
+## Visualize scores
+
+### Analyse scores
+
+```{r}
+di_mod_2020 <- aov(di ~ id_with_controls, data = data_2020 |> 
+                     filter(treatment == "16CUR018") |> 
+                     select(id_with_controls, di, position, lane) |> 
+                     distinct())
+di_mod_2021 <- aov(di ~ id_with_controls, data = data_2021 |> 
+                     filter(treatment == "16CUR018")|> 
+                     select(id_with_controls, di, position, lane) |> 
+                     distinct())
+
+di_mod_summaries <- broom::tidy(anova(di_mod_2020)) |> 
+  mutate(trait = "DI", 
+         year = 2020) |> 
+  bind_rows(broom::tidy(anova(di_mod_2021)) |> 
+  mutate(trait = "DI", 
+         year = 2021))
+```
+
+```{r}
+thsd_2021 <- agricolae::HSD.test(di_mod_2021, "id_with_controls")
+letters_2021 <- thsd_2021$groups |> 
+  select(-di) |> 
+  mutate(experiment = 2021)
+  
+letters_2021$id_with_controls <- rownames(letters_2021)
+
+letters_2020 <- data_2020 |> # ANOVA not significant for 2020, no pairwise comparisons performed here
+  select(experiment, id_with_controls) |> 
+  distinct() |> 
+  mutate(groups = "n.s.")
+
+sig_letters <- rbind(letters_2020, letters_2021)
+```
+
+
+```{r}
+p_scores <- lemna_data |>
+  filter(treatment == "Infected") |> 
+  select(id_with_controls, di, experiment) |> 
+  distinct() |> 
+  left_join(sig_letters) |> 
+  group_by(id_with_controls, experiment) |> 
+  mutate(mean_di = mean(di)) |> 
+  ggplot(aes(x = di, y = reorder(id_with_controls, mean_di))) +
+  geom_point(shape=1) +
+  geom_point(aes(x = mean_di, y = id_with_controls), shape = 3, color = "red") +
+  geom_label(aes(x = 80, label = groups), size= 3, label.size = 0) +
+  scale_x_continuous(limits = c(0, 82)) +
+  facet_wrap(~experiment, nrow = 1) +
+  labs(x = "Disease Index") +
+  theme(axis.title.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+p_scores
+```
+
+## Save plots
+
+```{r}
+ggsave(plot = p_psa, filename = "out/graphs/psa.pdf", units = "cm", width = 10, height = 6, scale = 2)
+ggsave(plot = p_scores, filename = "out/graphs/scores.pdf", units = "cm", width = 12, height = 8, scale = 1)
+```
+
+## Export clean LemnaTec data for smoothing
+
+```{r}
+write_csv(lemna_data, "out/data/psa.csv")
+```
+
+### Session info
+
+```{r}
+sessionInfo()
+```

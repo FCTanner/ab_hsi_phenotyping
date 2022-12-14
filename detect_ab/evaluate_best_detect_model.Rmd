@@ -1,0 +1,589 @@
+---
+title: "Evaluate best model for detection"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+.libPaths("C:/R-packages2")
+rm(list=ls())
+```
+
+## Content 
+
+Fit to entire 2021 data (2DAI best model as evaluated in meta_analysis_detect_ab.Rmd)
+Apply to 2020 data
+Extract important wavelengths
+2	Full spectrum	Raw	VNIR + SWIR	Pu	First	SVM
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(tidymodels)
+library(prospectr)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load data
+
+```{r}
+hyperspec_full_2020 <- read_csv("../pre_processing/hyperspectral/out/2020/raw_and_smoothed_full.csv")
+hyperspec_full_2021 <- read_csv("../pre_processing/hyperspectral/out/2021/raw_and_smoothed_full.csv")
+hyperspec_FWHM_2020 <- read_csv("../pre_processing/hyperspectral/out/2020/FWHM_binned.csv")
+hyperspec_FWHM_2021 <- read_csv("../pre_processing/hyperspectral/out/2021/FWHM_binned.csv")
+hyperspec_double_FWHM_2020 <- read_csv("../pre_processing/hyperspectral/out/2020/double_FWHM_binned.csv")
+hyperspec_double_FWHM_2021 <- read_csv("../pre_processing/hyperspectral/out/2021/double_FWHM_binned.csv")
+scores_2020 <- read_csv("../raw_data/scores/scores_2020.csv") 
+scores_2021 <- read_csv("../raw_data/scores/scores_2021.csv") 
+```
+
+### Function to prepare dataset for modeling
+
+
+```{r}
+prep_dataset <- function(dataset = hyperspec_full, 
+                         alive_only = TRUE, 
+                         response_chr = "reflectance_raw", 
+                         VNIR_only = TRUE, 
+                         set_date = as.Date("2021-06-15"),
+                         normalization = "Pu", 
+                         derivative = "None",
+                         gapDer_wl = 11,
+                         gapDer_seg = 9,
+                         scores = scores){
+  
+  # Combine with scores and pot ids
+  dat <- dataset |>
+    rename(imaging_date = date) |> # do not use function names as variable names
+    left_join(scores) |> 
+    dplyr::filter(imaging_date == set_date) |> 
+    rename(pot = id_tag)
+  
+  try(dat <- dat |> rename(wavelength = wavelength_bin)) # Rename var for the binned datasets
+  
+  # Subset
+  if(alive_only == TRUE){
+    dat <- dat |> filter(di < 100)
+  }else{
+    dat <- dat
+  }
+  if(VNIR_only == TRUE){
+    dat <- dat |>  filter(camera == "VNIR")
+  }else{
+    dat <- dat
+  }
+  
+  # Pre-processing
+  
+  ## Normalization
+  if(normalization == "Pu"){
+    pots <- unique(dat$pot)
+    pot_summary <- data.frame(pot = character(),
+                              avg_ref_per_curve = numeric())
+    for(p in pots){ # Summarizing reflectance per pot
+      pot_subset <- dat[dat$pot == p,]
+      list_of_response <- pot_subset |> pull(response_chr)
+      pot_mean <- mean(list_of_response, na.rm = TRUE)
+      p_summary <- data.frame(pot = p, avg_ref_per_curve = as.numeric(pot_mean))
+      
+      pot_summary <- rbind(pot_summary, p_summary)
+    }
+    dat <- dat |> 
+      left_join(pot_summary) 
+    response_num <- dat |> pull(response_chr)
+    
+    dat$response <- response_num/dat$avg_ref_per_curve
+  }else if(normalization == "None"){
+    dat <- dat
+    dat$response <- dat |> pull(response_chr)
+  }else{
+    dat <- dat
+    dat$response <- dat |> pull(response_chr)
+  }
+  
+  
+  ## Calculate derivatives 
+  
+  # Cast wide
+  dat <- dat |>  
+    pivot_wider(id_cols = c(pot, di), values_from = response, 
+                names_from = wavelength,values_fn = mean)
+  
+  # Calculate lagged Differences (derivatives), adjust lag depending on binning
+  if(derivative == "None"){
+    dat <- dat
+    
+  }else if(derivative == "First"){
+    hyper_mat <- as.matrix(dat[ , !names(dat) %in% c("pot","di")])
+    hyper_id <- as.matrix(dat[ , names(dat) %in% c("pot","di")])
+    
+    gds1 <- gapDer(X = hyper_mat, m = 1, w = gapDer_wl, s = gapDer_seg)
+
+    dat <- data.frame(hyper_id, gds1, check.names = FALSE)
+    dat$di <- as.numeric(dat$di)
+    
+  }else if(derivative == "Second"){
+    hyper_mat <- as.matrix(dat[ , !names(dat) %in% c("pot","di")])
+    hyper_id <- as.matrix(dat[ , names(dat) %in% c("pot","di")])
+    
+    gds2 <- gapDer(X = hyper_mat, m = 2, w = gapDer_wl, s = gapDer_seg)
+    
+    dat <- data.frame(hyper_id, gds2, check.names = FALSE)
+    dat$di <- as.numeric(dat$di)
+    
+  }else{
+    stop('Derivative needs to be "None", "First", or "Second"')
+  }
+  dat <- dat |> left_join(scores |> select(treatment, id_tag) |> rename(pot = id_tag)) |> select(-di)
+  return(dat)
+}
+```
+
+# Evaluate 2020 algorithms on 2021 data
+
+## Fit final model to 2021 data (choose best one in meta_analysis_detect_ab)
+
+## Prepare data
+
+### 2DAI
+
+```{r}
+data_2020_2dai_best_process_2020 <- prep_dataset(dataset = hyperspec_double_FWHM_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-05-14"),
+                                       normalization = "Pu",
+                                       VNIR_only = TRUE, 
+                                       derivative = "Second",
+                                       scores = scores_2020)
+
+data_2021_2dai_best_process_2020 <- prep_dataset(dataset = hyperspec_double_FWHM_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-05-27"),
+                                       normalization = "Pu",
+                                       VNIR_only = TRUE, 
+                                       derivative = "Second",
+                                       scores = scores_2021)
+
+colnames(data_2021_2dai_best_process_2020) <- colnames(data_2020_2dai_best_process_2020)
+```
+
+### 6DAI
+
+```{r}
+data_2020_6dai_best_process_2020 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-05-18"),
+                                       normalization = "None",
+                                       VNIR_only = TRUE, 
+                                       derivative = "Second",
+                                       scores = scores_2020)
+
+data_2021_6dai_best_process_2020 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-05-31"),
+                                       normalization = "None",
+                                       VNIR_only = TRUE, 
+                                       derivative = "Second",
+                                       scores = scores_2021)
+
+
+colnames(data_2021_6dai_best_process_2020) <- colnames(data_2020_6dai_best_process_2020)
+```
+
+### 13DAI
+
+```{r}
+data_2020_13dai_best_process_2020 <- prep_dataset(dataset = hyperspec_FWHM_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_smoothed", 
+                                       set_date = as.Date("2020-05-25"),
+                                       normalization = "Pu",
+                                       VNIR_only = FALSE, 
+                                       derivative = "None",
+                                       scores = scores_2020)
+
+data_2021_13dai_best_process_2020 <- prep_dataset(dataset = hyperspec_FWHM_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_smoothed", 
+                                       set_date = as.Date("2021-06-07"),
+                                       normalization = "Pu",
+                                       VNIR_only = FALSE, 
+                                       derivative = "None",
+                                       scores = scores_2021)
+
+
+
+colnames(data_2021_13dai_best_process_2020) <- colnames(data_2020_13dai_best_process_2020)
+```
+
+### 21 DAI
+
+```{r}
+data_2020_21dai_best_process_2020 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-06-02"),
+                                       normalization = "None",
+                                       VNIR_only = TRUE, 
+                                       derivative = "Second",
+                                       scores = scores_2020)
+
+data_2021_21dai_best_process_2020 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-06-07"),
+                                       normalization = "None",
+                                       VNIR_only = TRUE, 
+                                       derivative = "Second",
+                                       scores = scores_2021)
+
+
+
+colnames(data_2021_21dai_best_process_2020) <- colnames(data_2020_21dai_best_process_2020)
+```
+
+## Fit model to 2020 data
+
+### Set engine
+
+```{r}
+rf_spec <- rand_forest() |>
+  set_engine("ranger") |>
+  set_mode("classification") |>
+  translate()
+
+
+svm_spec <- svm_rbf(cost = 50) |>
+    set_engine("kernlab") |>
+    set_mode("classification") |>
+    translate()
+```
+
+
+### 2DAI
+
+```{r}
+detect_recipe_2DAI_2020 <- recipe((treatment ~ .), 
+                        data = data_2020_2dai_best_process_2020)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+rf_wf_2DAI_2020 <- workflow() |>
+  add_model(rf_spec) |>
+  add_recipe(detect_recipe_2DAI_2020)
+
+set.seed(123)
+rf_fit_2020_2DAI_2020 <- rf_wf_2DAI_2020 |> fit(data_2020_2dai_best_process_2020)
+```
+
+### Evaluate on 2021 data
+
+```{r}
+predict(rf_fit_2020_2DAI_2020, data_2021_2dai_best_process_2020) |> 
+  bind_cols(data_2021_2dai_best_process_2020$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+### 6DAI
+
+```{r}
+detect_recipe_6DAI_2020 <- recipe((treatment ~ .), 
+                        data = data_2020_6dai_best_process_2020)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_6DAI_2020 <- workflow() |>
+    add_model(svm_spec) |>
+    add_recipe(detect_recipe_6DAI_2020)
+
+set.seed(123)
+svm_fit_2020_6DAI_2020 <- svm_wf_6DAI_2020 |> fit(data_2020_6dai_best_process_2020)
+```
+
+```{r}
+predict(svm_fit_2020_6DAI_2020, data_2021_6dai_best_process_2020) |> 
+  bind_cols(data_2021_6dai_best_process_2020$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+### 13DAI
+
+```{r}
+detect_recipe_13DAI_2020 <- recipe((treatment ~ .), 
+                        data = data_2020_13dai_best_process_2020)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_13DAI_2020 <- workflow() |>
+    add_model(svm_spec) |>
+    add_recipe(detect_recipe_13DAI_2020)
+
+set.seed(123)
+svm_fit_2020_13DAI_2020 <- svm_wf_13DAI_2020 |> fit(data_2020_13dai_best_process_2020)
+```
+
+```{r}
+predict(svm_fit_2020_13DAI_2020, data_2021_13dai_best_process_2020) |> 
+  bind_cols(data_2021_13dai_best_process_2020$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+### 21 DAI
+
+```{r}
+detect_recipe_21DAI_2020 <- recipe((treatment ~ .), 
+                        data = data_2020_21dai_best_process_2020)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_21DAI_2020 <- workflow() |>
+    add_model(svm_spec) |>
+    add_recipe(detect_recipe_21DAI_2020)
+
+set.seed(123)
+svm_fit_2020_21DAI_2020 <- svm_wf_21DAI_2020 |> fit(data_2020_21dai_best_process_2020)
+```
+
+```{r}
+predict(svm_fit_2020_21DAI_2020, data_2021_21dai_best_process_2020) |> 
+  bind_cols(data_2021_21dai_best_process_2020$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+# Evaluate 2021 algorithms on 2020 data
+
+## Fit final model to 2021 data (choose best one in meta_analysis_detect_ab)
+
+## Prepare data
+
+### 2DAI
+
+```{r}
+data_2020_2dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-05-14"),
+                                       normalization = "Pu",
+                                       VNIR_only = FALSE, 
+                                       derivative = "First",
+                                       scores = scores_2020)
+
+data_2021_2dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-05-27"),
+                                       normalization = "Pu",
+                                       VNIR_only = FALSE, 
+                                       derivative = "First",
+                                       scores = scores_2021)
+
+colnames(data_2021_2dai_best_process_2021) <- colnames(data_2020_2dai_best_process_2021)
+```
+
+### 6DAI
+
+```{r}
+data_2020_6dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-05-18"),
+                                       normalization = "Pu",
+                                       VNIR_only = FALSE, 
+                                       derivative = "First",
+                                       scores = scores_2020)
+
+data_2021_6dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-05-31"),
+                                       normalization = "Pu",
+                                       VNIR_only = FALSE, 
+                                       derivative = "First",
+                                       scores = scores_2021)
+
+
+colnames(data_2021_6dai_best_process_2021) <- colnames(data_2020_6dai_best_process_2021)
+```
+
+### 13DAI
+
+```{r}
+data_2020_13dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-05-25"),
+                                       normalization = "None",
+                                       VNIR_only = FALSE, 
+                                       derivative = "None",
+                                       scores = scores_2020)
+
+data_2021_13dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-06-07"),
+                                       normalization = "None",
+                                       VNIR_only = FALSE, 
+                                       derivative = "None",
+                                       scores = scores_2021)
+
+
+
+colnames(data_2021_13dai_best_process_2021) <- colnames(data_2020_13dai_best_process_2021)
+```
+
+### 21 DAI
+
+```{r}
+data_2020_21dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2020, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2020-06-02"),
+                                       normalization = "None",
+                                       VNIR_only = FALSE, 
+                                       derivative = "Second",
+                                       scores = scores_2020)
+
+data_2021_21dai_best_process_2021 <- prep_dataset(dataset = hyperspec_full_2021, 
+                                       alive_only = TRUE, # Not relevant here, no dead pots
+                                       response_chr = "reflectance_raw", 
+                                       set_date = as.Date("2021-06-07"),
+                                       normalization = "None",
+                                       VNIR_only = FALSE, 
+                                       derivative = "Second",
+                                       scores = scores_2021)
+
+
+
+colnames(data_2021_21dai_best_process_2021) <- colnames(data_2020_21dai_best_process_2021)
+```
+
+## Train on 2021, test on 2020 
+
+### 2DAI
+
+```{r}
+detect_recipe_2DAI_2021 <- recipe((treatment ~ .), 
+                        data = data_2021_2dai_best_process_2021)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_2DAI_2021 <- workflow() |>
+  add_model(svm_spec) |>
+  add_recipe(detect_recipe_2DAI_2021)
+
+set.seed(123)
+svm_fit_2021_2DAI_2021 <-svm_wf_2DAI_2021 |> fit(data_2021_2dai_best_process_2021)
+```
+
+
+```{r}
+predict(svm_fit_2021_2DAI_2021, data_2020_2dai_best_process_2021) |> 
+  bind_cols(data_2020_2dai_best_process_2021$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+### 6DAI
+
+```{r}
+detect_recipe_6DAI_2021 <- recipe((treatment ~ .), 
+                        data = data_2021_6dai_best_process_2021)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_6DAI_2021 <- workflow() |>
+    add_model(svm_spec) |>
+    add_recipe(detect_recipe_6DAI_2021)
+
+set.seed(123)
+svm_fit_2021_6DAI_2021 <- svm_wf_6DAI_2021 |> fit(data_2021_6dai_best_process_2021)
+```
+
+```{r}
+predict(svm_fit_2021_6DAI_2021, data_2020_6dai_best_process_2021) |> 
+  bind_cols(data_2020_6dai_best_process_2021$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+### 13DAI
+
+```{r}
+detect_recipe_13DAI_2021 <- recipe((treatment ~ .), 
+                        data = data_2021_13dai_best_process_2021)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_13DAI_2021 <- workflow() |>
+    add_model(svm_spec) |>
+    add_recipe(detect_recipe_13DAI_2021)
+
+set.seed(123)
+svm_fit_2021_13DAI_2021 <- svm_wf_13DAI_2021 |> fit(data_2021_13dai_best_process_2021)
+```
+
+```{r}
+predict(svm_fit_2021_13DAI_2021, data_2020_13dai_best_process_2021) |> 
+  bind_cols(data_2020_13dai_best_process_2021$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+### 21 DAI
+
+```{r}
+detect_recipe_21DAI_2021 <- recipe((treatment ~ .), 
+                        data = data_2021_21dai_best_process_2021)  |>
+  update_role(pot, new_role = "ID") |> 
+  step_center(all_predictors()) |>
+  step_scale(all_predictors()) |>
+  step_zv(all_predictors()) 
+
+svm_wf_21DAI_2021 <- workflow() |>
+    add_model(svm_spec) |>
+    add_recipe(detect_recipe_21DAI_2021)
+
+set.seed(123)
+svm_fit_2021_21DAI_2021 <- svm_wf_21DAI_2021 |> fit(data_2021_21dai_best_process_2021)
+```
+
+```{r}
+predict(svm_fit_2021_21DAI_2021, data_2020_21dai_best_process_2021) |> 
+  bind_cols(data_2020_21dai_best_process_2021$treatment) |> 
+  mutate(truth = as.factor(...2)) |> 
+  accuracy(truth = truth, estimate = .pred_class)
+```
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,291 @@
+---
+title: "Meta analysis predict DI"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+rm(list=ls())
+```
+
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(gt)
+library(patchwork)
+library(yardstick)
+`%nin%` <- negate(`%in%`)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Hyperspec
+
+## Load data
+
+### Hyperspec CV metrics
+
+```{r}
+hyper_metrics_2020 <- read_csv("out/hyperspectral_cv_metrics_2020.csv") |> mutate(study = "2020")
+hyper_metrics_2021 <- read_csv("out/hyperspectral_cv_metrics_2021.csv") |> mutate(study = "2021")
+```
+
+### Final fit predictions
+
+```{r}
+lemna_final_fit_predictions_2021 <- read_csv("out/predictions/lemna_predictions_2021.csv")
+hyper_final_fit_predictions_2021 <- read_csv("out/predictions/hyper_rf_pred_2021.csv")
+
+lemna_final_fit_predictions_2020 <- read_csv("out/predictions/lemna_predictions_2020.csv")
+hyper_final_fit_predictions_2020 <- read_csv("out/predictions/hyper_plsr_pred_2020.csv")
+```
+
+
+## Clean hyperspec metrics 
+* Calculating mean and sd of Rsq over all cross-fold combinations and repeats
+* 
+
+```{r}
+hyper_metrics_clean <- hyper_metrics_2020 |> 
+  bind_rows(hyper_metrics_2021) |>
+  mutate(grouping = str_c(study,  VNIR_only, dataset, normalization, derivative, model, "-", response, sep = " "),
+         response = str_remove(response, "reflectance_"),
+         description = str_c(study,  model, "-", response, normalization, derivative, sep = " "),
+         sorting_hat = str_c(study,  VNIR_only, dataset, sep = " ")) |> 
+  group_by(grouping, .metric)  |> 
+  summarise(mean_metric = round(mean(.estimate), 2),
+         sd_metric  = round(sd(.estimate), 2),
+         n_cv_folds = n(), # Checking that 25 folds exist
+         study = study,
+         dataset = dataset,
+         response = response,
+         VNIR_only = VNIR_only,
+         sorting_hat = sorting_hat,
+         description = description,
+         normalization = normalization, 
+         derivative = derivative,
+         model = model) |>
+  distinct() |> 
+  ungroup() |> 
+  pivot_wider(values_from = c(mean_metric, sd_metric), names_from = .metric) |> 
+  group_by(sorting_hat)
+```
+## Table version of metrics
+
+```{r, width = 8}
+wide_hyper_metrics <- hyper_metrics_clean |> 
+  ungroup() |>
+  select(dataset, response, VNIR_only, normalization, derivative, model, mean_metric_rmse, sd_metric_rmse, study) |> 
+  pivot_wider(names_from = study, values_from = c(mean_metric_rmse, sd_metric_rmse)) 
+```
+
+```{r}
+table_hyper_cv <- wide_hyper_metrics |> 
+  slice_min(order_by = mean_metric_rmse_2020, n = 5) |> 
+  mutate(year = "Best algorithms 2020") |> 
+  bind_rows(wide_hyper_metrics |> 
+              slice_min(order_by = mean_metric_rmse_2021, n = 5) |> 
+              mutate(year = "Best algorithms 2021")) |> 
+  mutate(metric_2020 = paste(mean_metric_rmse_2020, "\u00b1", sd_metric_rmse_2020),
+         metric_2021 = paste(mean_metric_rmse_2021, "\u00b1", sd_metric_rmse_2021),
+         response = stringr::str_to_title(response)) |> 
+  select(-contains(c("mean", "sd"))) |> 
+  group_by(year) |> 
+  gt() |> 
+  cols_label(dataset = "Binning",
+             response = "Smoothing",
+             VNIR_only = "Sensors",
+             normalization = "Normalization",
+             derivative = "Derivative",
+             model = "Model",
+             metric_2020 = "RMSE 2020",
+             metric_2021 = "RMSE 2021")
+table_hyper_cv
+
+gtsave(table_hyper_cv, "out/table/cv_results_hyper.tex")
+```
+
+## Evaluate final fits
+
+### 2021
+
+```{r}
+final_predictions_2021<- lemna_final_fit_predictions_2021 |> 
+  select(di, linreg_pred, rf_pred, plotId ) |> 
+  rename(pot = plotId) |> 
+  left_join(hyper_final_fit_predictions_2021 |> select(di, hyper_rf_pred, pot), by = "pot")
+```
+
+```{r}
+pred_metrics_2021 <- final_predictions_2021 |> 
+  metrics(truth = di.x, estimate = rf_pred) |> 
+  mutate(model = "RGB Random Forest") |> 
+  bind_rows(final_predictions_2021 |> 
+  metrics(truth = di.x, estimate = linreg_pred) |> 
+  mutate(model = "RGB Linear Regression")) |> 
+  bind_rows(final_predictions_2021 |> 
+  metrics(truth = di.x, estimate = hyper_rf_pred) |> 
+  mutate(model = "Hyperspectral Random Forest")) |> 
+  filter(.metric != "mae") |> 
+  mutate(.estimate = round(.estimate, 2),
+         .metric = toupper(.metric)) |> 
+  pivot_wider(values_from= .estimate, names_from = .metric, id_cols = -.estimator) |> 
+  rename(Model = model) 
+  
+pred_metrics_2021 |> 
+  gt() |> 
+  gtsave("out/table/final_fit_2021_metrics.tex")
+```
+
+### 2020
+
+```{r}
+final_predictions_2020 <- lemna_final_fit_predictions_2020 |> 
+  select(di, linreg_pred, rf_pred, plotId ) |> 
+  rename(pot = plotId) |> 
+  left_join(hyper_final_fit_predictions_2020 |> select(di, hyper_plsr_pred, pot), by = "pot")
+```
+
+```{r}
+pred_metrics_2020 <- final_predictions_2020 |> 
+  metrics(truth = di.x, estimate = rf_pred) |> 
+  mutate(model = "RGB Random Forest") |> 
+  bind_rows(final_predictions_2020 |> 
+  metrics(truth = di.x, estimate = linreg_pred) |> 
+  mutate(model = "RGB Linear Regression")) |> 
+  bind_rows(final_predictions_2020 |> 
+  metrics(truth = di.x, estimate = hyper_plsr_pred) |> 
+  mutate(model = "Hyperspectral PLSR")) |> 
+  filter(.metric != "mae") |> 
+  mutate(.estimate = round(.estimate, 2),
+         .metric = toupper(.metric)) |> 
+  pivot_wider(values_from= .estimate, names_from = .metric, id_cols = -.estimator) |> 
+  rename(Model = model) 
+  
+pred_metrics_2020 |> 
+  gt() |> 
+  gtsave("out/table/final_fit_2020_metrics.tex")
+```
+
+
+## Plot final predictions
+
+```{r}
+color_palette <- paletteer::paletteer_d("ggprism::colorblind_safe", 3)
+color_palette 
+```
+
+### 2021
+
+```{r}
+p_hyper_rf_2021 <- final_predictions_2021 |> 
+  ggplot(aes(x = di.x, y = hyper_rf_pred)) +
+  geom_point(color = color_palette[1], shape = 1) +
+  labs(x = "True Disease Index", y = "Predicted index\nBest hyperspectral algorithm") +
+  scale_y_continuous(limits = c(0, 80)) +
+  scale_x_continuous(limits = c(0,80)) +
+  annotate(geom = "text", x = 10, y = 70, label = "RMSE = 21.08\nRsq = 0.02", hjust = 0) 
+
+p_hyper_rf_2021
+```
+
+```{r}
+p_rgb_rf_2021 <- final_predictions_2021 |> 
+  ggplot(aes(x = di.x, y = rf_pred)) +
+  geom_point(color = color_palette[2], shape = 2) +
+  labs(x = "True Disease Index", y = "Predicted index\nRGB random forest model") +
+  scale_y_continuous(limits = c(0, 80)) +
+  scale_x_continuous(limits = c(0,80))+
+  annotate(geom = "text", x = 10, y = 70, label = "RMSE = 19.21\nRsq = 0.30", hjust = 0) 
+
+p_rgb_rf_2021
+```
+```{r}
+p_rgb_linreg_2021 <- final_predictions_2021 |> 
+  ggplot(aes(x = di.x, y = linreg_pred)) +
+  geom_point(color = color_palette[3], shape = 3) +
+  labs(x = "True Disease Index", y = "Predicted index\nRGB linear regression model") +
+  scale_y_continuous(limits = c(0, 80)) +
+  scale_x_continuous(limits = c(0,80))+
+  annotate(geom = "text", x = 10, y = 70, label = "RMSE = 12.43\nRsq = 0.64", hjust = 0) 
+
+p_rgb_linreg_2021
+
+p_rgb_linreg_2021_for_illustration <- final_predictions_2021 |> 
+  select(di.x, linreg_pred) |> 
+  bind_rows(data.frame(linreg_pred = runif(10,30,80), di.x = runif(10,30,80))) |> 
+  ggplot(aes(x = di.x, y = linreg_pred)) +
+  geom_point(color = color_palette[3], shape = 3) +
+  labs(x = "True Disease Index", y = "Predicted Index") +
+  scale_y_continuous(limits = c(0, 80)) +
+  scale_x_continuous(limits = c(0,80)) 
+p_rgb_linreg_2021_for_illustration
+```
+
+### 2020
+
+```{r}
+p_hyper_plsr_2020 <- final_predictions_2020 |> 
+  ggplot(aes(x = di.x, y = hyper_plsr_pred)) +
+  geom_point(color = color_palette[1], shape = 1) +
+  labs(x = "True Disease Index", y = "Predicted index\nBest hyperspectral algorithm") +
+  scale_y_continuous(limits = c(0, 30)) +
+  scale_x_continuous(limits = c(0,30)) +
+  annotate(geom = "text", x =  3.75, y = 26.25, label = "RMSE = 8.08\nRsq = 0.00", hjust = 0) 
+
+p_hyper_plsr_2020
+```
+
+```{r}
+p_rgb_rf_2020 <- final_predictions_2020 |> 
+  ggplot(aes(x = di.x, y = rf_pred)) +
+  geom_point(color = color_palette[2], shape = 2) +
+  labs(x = "True Disease Index", y = "Predicted index\nRGB random forest model") +
+  scale_y_continuous(limits = c(0, 30)) +
+  scale_x_continuous(limits = c(0,30))+
+  annotate(geom = "text", x =  3.75, y = 26.25, label = "RMSE = 7.12\nRsq = 0.12", hjust = 0) 
+
+p_rgb_rf_2020
+```
+```{r}
+p_rgb_linreg_2020 <- final_predictions_2020 |> 
+  ggplot(aes(x = di.x, y = linreg_pred)) +
+  geom_point(color = color_palette[3], shape = 3) +
+  labs(x = "True Disease Index", y = "Predicted index\nRGB linear regression model") +
+  scale_y_continuous(limits = c(0, 30)) +
+  scale_x_continuous(limits = c(0,30))+
+  annotate(geom = "text", x =  3.75, y = 26.25, label = "RMSE = 5.99\nRsq = 0.37", hjust = 0) 
+
+p_rgb_linreg_2020
+```
+
+
+```{r}
+ggsave(plot = p_rgb_linreg_2021_for_illustration, "out/graphs/mock_rgb_predictions_2021_for_illustration.pdf",device = "pdf", units = "cm", width = 6, height = 6, limitsize = F, scale = 1)
+
+p_predictions_2021 <- p_hyper_rf_2021 + p_rgb_rf_2021 + p_rgb_linreg_2021 + 
+  plot_layout(nrow = 1)
+p_predictions_2021
+
+ggsave(plot = p_predictions_2021, "out/graphs/final_fit_predictions_2021.pdf",device = "pdf", units = "cm", width = 12, height = 4.2, limitsize = F, scale = 1.7)
+
+p_predictions_2020 <- p_hyper_plsr_2020 + p_rgb_rf_2020 + p_rgb_linreg_2020 +
+  plot_layout(nrow = 1)
+p_predictions_2020
+ggsave(plot = p_predictions_2020, "out/graphs/final_fit_predictions_2020.pdf",device = "pdf", units = "cm", width = 12, height = 4.2, limitsize = F, scale = 1.7)
+```
+
+
+
+### Session info
+```{r}
+sessionInfo()
+```

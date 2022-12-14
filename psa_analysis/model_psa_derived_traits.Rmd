@@ -1,0 +1,184 @@
+---
+title: "Model PSA derived traits"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+rm(list=ls())
+```
+
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(patchwork)
+library(statgenGxE)
+library(gt)
+`%nin%` <- negate(`%in%`)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+color_palette <- paletteer::paletteer_d(`"basetheme::clean"`, 2)
+```
+
+
+# Load data
+
+## Load LemnaTec results
+
+```{r}
+scores <- read_csv("../raw_data/scores/scores_2020.csv") |> rename(plotId  = id_tag) |> select(di, plotId) |> 
+  bind_rows(read_csv("../raw_data/scores/scores_2021.csv") |> rename(plotId  = id_tag) |> select(di, plotId))
+
+traits <- read_csv("out/data/traits.csv") |> 
+  left_join(scores) |> 
+  rename(DI = di)
+```
+
+## Build models 
+
+```{r}
+traits_to_model <- c("PSA_0", "PSA_7", "PSA_14", "PSA_21", "AGR_0_7", "AGR_7_14", "AGR_14_21", "RGR_0_7", "RGR_7_14", "RGR_14_21")
+
+data_2020 <- traits |> filter(experiment == 2020)
+data_2021 <- traits |> filter(experiment == 2021)
+```
+
+```{r}
+trait_mod_summaries_2020 <- data.frame()
+trait_mod_hsd_2020 <- data.frame()
+
+for(i in 1:length(traits_to_model)){
+  mod_formula <- as.formula(paste(traits_to_model[i], " ~ id_with_controls * treatment"))
+  print(mod_formula)
+  mod <- aov(formula= mod_formula, data = data_2020)
+  trait_mod_summary <- broom::tidy(anova(mod))
+  trait_mod_summary$trait <- traits_to_model[i]
+  trait_mod_summaries_2020 <- rbind(trait_mod_summaries_2020, trait_mod_summary)
+  hsd <- broom::tidy(TukeyHSD(mod))
+  hsd$trait <- traits_to_model[i]
+  trait_mod_hsd_2020 <- rbind(trait_mod_hsd_2020, hsd)
+}
+```
+```{r}
+trait_mod_summaries_2021 <- data.frame()
+trait_mod_hsd_2021 <- data.frame()
+
+for(i in 1:length(traits_to_model)){
+  mod_formula <- as.formula(paste(traits_to_model[i], " ~ id_with_controls * treatment"))
+  print(mod_formula)
+  mod <- aov(formula= mod_formula, data = data_2021)
+  trait_mod_summary <- broom::tidy(anova(mod))
+  trait_mod_summary$trait <- traits_to_model[i]
+  trait_mod_summaries_2021 <- rbind(trait_mod_summaries_2021, trait_mod_summary)
+  hsd <- broom::tidy(TukeyHSD(mod))
+  hsd$trait <- traits_to_model[i]
+  trait_mod_hsd_2021 <- rbind(trait_mod_hsd_2021, hsd)
+}
+```
+
+### Analyse scores
+
+```{r}
+di_mod_2020 <- aov(DI ~ id_with_controls, data = data_2020 |> filter(treatment == "Infected"))
+di_mod_2021 <- aov(DI ~ id_with_controls, data = data_2021 |> filter(treatment == "Infected"))
+
+di_mod_summaries <- broom::tidy(anova(di_mod_2020)) |> 
+  mutate(trait = "DI", 
+         year = 2020) |> 
+  bind_rows(broom::tidy(anova(di_mod_2021)) |> 
+  mutate(trait = "DI", 
+         year = 2021) )
+
+
+```
+
+
+```{r}
+p_val_table <- trait_mod_summaries_2020 |> 
+  mutate(year = 2020) |> 
+  bind_rows(trait_mod_summaries_2021 |> 
+              mutate(year = 2021)) |> 
+  bind_rows(di_mod_summaries) |> 
+  pivot_wider(id_cols = c(year, trait), values_from = p.value, names_from = term) |> 
+  mutate(id_with_controls = case_when(`id_with_controls:treatment` < 0.05 ~ 100,
+                                      TRUE ~ id_with_controls),
+         treatment = case_when(`id_with_controls:treatment` < 0.05 ~ 10,
+                                      TRUE ~ treatment)) |> 
+    pivot_longer(cols = c(-trait, -year), names_prefix = "p_val_") |> 
+  mutate(p_val_format =  finalfit::p_tidy(value, digits = 3),
+         p_val_format = case_when(value > 1 ~ "=NA",
+                                  TRUE ~ p_val_format),
+         p_val_format = str_remove(p_val_format, "="),
+         p_val_format = paste("$", p_val_format, "$", sep = "")) |> 
+  pivot_wider(values_from = p_val_format, names_from = name, id_cols = c(trait, year), names_prefix = "p_val_") |> 
+  arrange(trait) |> 
+  select(-p_val_Residuals) |> 
+  gt() |> 
+  cols_label(trait= "Trait",
+             year = "Year",
+             p_val_id_with_controls = "Genotype",
+             p_val_treatment = "Treatment",
+             `p_val_id_with_controls:treatment` = "Genotype x Treatment")
+
+p_val_table
+
+gtsave(p_val_table, "out/results/p_val_hsd.tex")
+```
+
+## Scores pairwise
+
+```{r}
+broom::tidy(TukeyHSD(di_mod_2021)) |> 
+  filter(adj.p.value <= 0.05)
+```
+
+
+```{r}
+trait_mod_hsd_2020 |> 
+  mutate(year = 2020) |> 
+  bind_rows(trait_mod_hsd_2021 |> mutate(year = 2021)) |> 
+  filter(trait ==  "RGR_7_14",
+         term =="id_with_controls:treatment",
+         adj.p.value < 0.05)
+```
+
+```{r}
+p_rgr_7_14 <- traits |> 
+  ggplot(aes( x= id_with_controls, y = RGR_7_14, color = treatment, fill = treatment, shape = treatment)) +
+  geom_boxplot(alpha =0.2, outlier.shape = NA ) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.1)) +
+  scale_color_manual(values = color_palette) +
+  scale_fill_manual(values = color_palette) + 
+  facet_wrap(~experiment, nrow= 2) +
+  labs(y = "Relative growth rate 7 to 14 DAI") +
+  theme(axis.title.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        legend.title = element_blank(),
+        legend.position = "bottom")
+
+p_rgr_7_14
+```
+```{r}
+ggsave(plot = p_rgr_7_14, filename = "out/graphs/p_rgr_7_14.pdf", device = "pdf", limitsize = F, units = "cm", width = 12, height = 10, scale = 1.5)
+```
+
+
+
+
+## Session info
+
+```{r}
+sessionInfo()
+```

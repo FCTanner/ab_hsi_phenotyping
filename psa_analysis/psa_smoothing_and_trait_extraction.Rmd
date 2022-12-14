@@ -1,0 +1,246 @@
+---
+title: "PSA analysis"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+rm(list=ls())
+```
+
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(statgenHTP)
+library(patchwork)
+`%nin%` <- negate(`%in%`)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+color_palette <- paletteer::paletteer_d(`"basetheme::clean"`, 2)
+```
+
+
+# Load data
+
+## Load LemnaTec results
+
+```{r}
+lemna_data <- read_csv("../eda/out/data/psa.csv") |> 
+  mutate(snapshot_date = lubridate::floor_date(snapshot_time_stamp, unit = "days")) |>  # Create time points) 
+  rename(PSA = projected_shoot_area_pixels)
+```
+
+## Set params 
+```{r}
+check_genos <- c("Howzat", "Genesis090")
+
+inoc_date_2020 <- as.Date("2020-05-12")
+inoc_date_2021 <- as.Date("2021-05-25")
+
+n_knots <- 5
+```
+
+
+# statgenHTP analysis
+
+##  Data prep
+
+### 2020
+
+```{r}
+pheno_TP_2020 <- createTimePoints(dat = lemna_data |> filter(experiment == 2020), 
+                                  experimentName = "2020",
+                                  genotype = "id_with_controls", 
+                                  timePoint = "snapshot_date",
+                                  plotId = "id_tag",
+                                  addCheck = T, 
+                                  checkGenotypes = check_genos,
+                                  rowNum = "position",
+                                  colNum = "lane")
+
+attr(pheno_TP_2020, 'plotLimObs')
+summary(pheno_TP_2020)
+```
+### 2021 
+
+```{r}
+pheno_TP_2021 <- createTimePoints(dat = lemna_data |> filter(experiment == 2021), 
+                                  experimentName = "2021",
+                                  genotype = "id_with_controls", 
+                                  timePoint = "snapshot_date",
+                                  plotId = "id_tag",
+                                  addCheck = T, 
+                                  checkGenotypes = check_genos,
+                                  rowNum = "position",
+                                  colNum = "lane")
+```
+
+## Fit splines
+
+### 2020
+
+```{r}
+fit_spline_2020 <- fitSpline(data.frame(pheno_TP_2020),
+                             trait = "PSA",
+                             knots = n_knots)
+
+spline_2020 <- fit_spline_2020$pred
+```
+
+### 2021
+
+```{r}
+fit_spline_2021 <- fitSpline(data.frame(pheno_TP_2021),
+                             trait = "PSA",
+                             knots = n_knots)
+
+spline_2021 <- fit_spline_2021$pred
+```
+
+## Extract smoothed
+
+### 2020
+
+```{r}
+smoothed_2020 <- spline_2020 |> 
+  mutate(date = lubridate::floor_date(timePoint, unit = "days")) |> 
+  group_by(plotId, date) |> 
+  summarise(across(.cols = c(pred.value, deriv, deriv2), .fns=  mean)) |> 
+  ungroup() |> 
+  mutate(dai = as.numeric(difftime(as.Date(date), inoc_date_2020, unit = "days")),
+         experiment  = "2020") |> 
+  left_join(lemna_data |> select(id_tag, id_with_controls, treatment) |> rename(plotId = id_tag)) |> 
+  distinct() 
+
+
+smoothed_2020
+```
+
+### 2021
+
+```{r}
+smoothed_2021 <- spline_2021 |> 
+  mutate(date = lubridate::floor_date(timePoint, unit = "days")) |> 
+  group_by(plotId, date) |> 
+  summarise(across(.cols = c(pred.value, deriv, deriv2), .fns=  mean)) |> 
+  ungroup() |> 
+  mutate(dai = as.numeric(difftime(as.Date(date), inoc_date_2021, unit = "days")),
+         experiment  = "2021") |> 
+  left_join(lemna_data |> select(id_tag, id_with_controls, treatment) |> rename(plotId = id_tag)) |> 
+  distinct()
+
+
+smoothed_2021
+```
+
+## Plot smoothed
+
+```{r, fig.height = 6}
+smoothed_data <- smoothed_2020 |> 
+  bind_rows(smoothed_2021) 
+
+p_psa_smoothed <- smoothed_data |> 
+ ggplot(aes(x = dai, y = pred.value/100000, color = treatment, shape = treatment)) +
+  # geom_point(alpha = 0.7, size = 0.5) +
+  geom_line(aes(group = plotId), alpha = 0.7, size = 0.6) +
+  scale_color_manual(values = color_palette) +
+  scale_x_continuous(breaks = c(0,7,14,21), limits = c(-1, 21)) +
+  scale_y_continuous(labels = scales::comma, limits = c(0,6)) +
+  facet_grid(experiment~id_with_controls) +
+  labs(y = "Smoothed projected shoot area (pixels)\nx 100000", x = "Days after infection") +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
+
+p_psa_smoothed
+```
+```{r}
+ggsave(plot = p_psa_smoothed, filename = "out/graphs/psa_smoothed.pdf", units = "cm", width = 10, height = 6, scale = 2)
+```
+
+
+## Extract traits
+
+* PSA @ 0, 7, 14, 21 
+* AGR 0-7, 7-14, 14-21
+* RGR 0-7, 7-14, 14-21
+
+```{r}
+traits <- smoothed_data |> 
+  filter(dai %in% c(0,7,14,21)) |> 
+  mutate(PSA = pred.value/100000) |> 
+  pivot_wider(id_cols = c(-date, -deriv, -deriv2, -pred.value),  values_from = PSA, names_from = dai, names_prefix = "PSA_") |> 
+  mutate(AGR_0_7 = (PSA_7 - PSA_0)/7,
+         AGR_7_14 = (PSA_14 - PSA_7)/7,
+         AGR_14_21 = (PSA_21 - PSA_14)/7,
+         RGR_0_7 = (log(PSA_7) - log(PSA_0))/7, 
+         RGR_7_14 = (log(PSA_14) - log(PSA_7))/7, 
+         RGR_14_21 = (log(PSA_21) - log(PSA_14))/7)
+```
+
+
+```{r}
+long_traits <- traits |> 
+  pivot_longer(cols = c(-plotId, -experiment, -id_with_controls, -treatment), names_to = "trait") 
+
+plot_trait <- function(plot_data = long_traits, plot_trait = "PSA_0", y_label = "PSA 0 DAI\nx 100,000"){
+  p <- plot_data |> 
+    filter(trait == plot_trait) |> 
+    ggplot(aes(y = value, x= id_with_controls, color = treatment, fill = treatment, shape = treatment)) +
+    geom_boxplot(alpha =0.2, outlier.shape = FALSE ) +
+    geom_jitter(position = position_jitterdodge(jitter.width = 0.1)) +
+    scale_color_manual(values = color_palette) +
+    scale_fill_manual(values = color_palette) +
+    expand_limits(y = 0) +
+    facet_wrap(~experiment, scales = "free_x") +
+    labs(y = y_label) +
+    theme(axis.title.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          legend.title = element_blank())
+  return(p)
+}
+```
+
+```{r, fig.height = 5}
+psa_0_dai <- plot_trait()
+psa_7_dai <- plot_trait(plot_trait = "PSA_7", y_label = "PSA 7 DAI\nx 100,000")
+psa_14_dai <- plot_trait(plot_trait = "PSA_14", y_label = "PSA 14 DAI\nx 100,000")
+psa_21_dai <- plot_trait(plot_trait = "PSA_21", y_label = "PSA 21 DAI\nx 100,000")
+
+
+p_psa <- psa_0_dai + psa_7_dai + psa_14_dai + psa_21_dai +
+  plot_layout(guides = "collect", nrow = 4) & theme(legend.position = "bottom")
+
+p_psa
+```
+```{r, fig.height = 5}
+rgr_0_7 <- plot_trait(plot_trait = "RGR_0_7", y_label = "RGR 0 to 7 DAI")
+rgr_7_14 <- plot_trait(plot_trait = "RGR_7_14", y_label = "RGR 7 to 14 DAI")
+rgr_14_21 <- plot_trait(plot_trait = "RGR_14_21", y_label = "RGR 14 to 21 DAI")
+
+
+p_rgr <- rgr_0_7 + rgr_7_14 + rgr_14_21 + 
+  plot_layout(guides = "collect", nrow = 3) & theme(legend.position = "bottom")
+
+p_rgr
+```
+
+
+## Session info
+
+```{r}
+sessionInfo()
+```

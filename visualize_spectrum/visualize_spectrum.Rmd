@@ -1,0 +1,107 @@
+---
+title: "Early detection of AB"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+.libPaths("C:/R-packages2")
+rm(list=ls())
+```
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(prospectr)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+color_palette <- paletteer::paletteer_d(`"basetheme::clean"`, 2)
+```
+
+## Load data
+
+```{r}
+scores <- read_csv(paste("../raw_data/scores/scores_2021.csv", sep = ""))
+hyperspec_full <- read_csv(paste("../pre_processing/hyperspectral/out/2021/raw_and_smoothed_full.csv", sep = ""))
+hyperspec_FWHM <- read_csv(paste("../pre_processing/hyperspectral/out/2021/FWHM_binned.csv", sep = ""))
+hyperspec_double_FWHM <- read_csv(paste("../pre_processing/hyperspectral/out/2021/double_FWHM_binned.csv", sep = ""))
+```
+```{r}
+zhang_features <- c(670, 680, 730, 770, 1220, 1230, 1241, 1251, 1260, 1271, 1281, 1380, 1391, 1660)
+```
+
+```{r}
+p_reflectance_2021 <- hyperspec_full |> 
+  left_join(scores) |> 
+  mutate(date = as.Date(date),
+         treatment = case_when(treatment == "16CUR018" ~ "Infected",
+                               TRUE ~ treatment)) |> 
+  filter(!is.na(treatment)) |> 
+  filter(date %in% c(as.Date("2021-06-15"))) |> 
+  group_by(date, wavelength, treatment) |> 
+  summarise(mean_ref = mean(reflectance_smoothed)) |> 
+  ungroup() |> 
+  ggplot(aes(x = wavelength, y = mean_ref, color = treatment)) +
+  geom_line(alpha = 1) +
+  geom_label(aes(x = 1700, y = 0.3, label = "Control"), color =color_palette[1]) +
+  geom_label(aes(x = 1000, y = 0.1, label = "Infected"), color =color_palette[2]) +
+  scale_color_manual(values = color_palette) + 
+  scale_y_continuous(limits = c(0, 0.35), labels = scales::label_percent()) +
+  labs(x = "Wavelength [nm]", y = "Reflectance") +
+  theme(panel.grid= element_blank(),
+        legend.title = element_blank(),
+        legend.position = "none")
+
+
+p_reflectance_2021
+  
+```
+
+
+```{r}
+p_zhang_features_21DAI <- hyperspec_full |> 
+  left_join(scores) |> 
+  mutate(date = as.Date(date),
+         treatment = case_when(treatment == "16CUR018" ~ "Infected",
+                               TRUE ~ treatment)) |> 
+  filter(!is.na(treatment)) |> 
+  filter(date %in% c(as.Date("2021-06-15"))) |> 
+  group_by(date, wavelength, treatment) |> 
+  summarise(mean_ref = mean(reflectance_smoothed)) |> 
+  ungroup() |> 
+  ggplot(aes(x = wavelength, y = mean_ref, color = treatment)) +
+  geom_vline(xintercept = zhang_features, alpha = 0.6, color = "lightgrey", size= 0.3, linetype = 2) +
+  geom_line(alpha = 0.7) +
+  scale_color_manual(values = color_palette) + 
+  scale_y_continuous(limits = c(0, 0.35), labels = scales::label_percent()) +
+  labs(x = "Wavelength [nm]", y = "Reflectance") +
+  theme(panel.grid= element_blank(),
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+p_zhang_features_21DAI
+```
+
+
+```{r}
+ggsave(plot = p_reflectance_2021, filename = "out/2021_mean_smoothed_ref_21DAI.pdf", device = "pdf", units = "cm", width = 9, height = 6.5)
+ggsave(plot = p_zhang_features_21DAI, filename = "out/zhang_features_on_2021_mean_smoothed_ref_21DAI.pdf", device = "pdf", units = "cm", width = 12, height = 10)
+```
+
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,438 @@
+---
+title: "Predict disease index hyperspectral data cross-validation"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+```{r}
+.libPaths("C:/R-packages2")
+rm(list=ls())
+```
+
+
+## Load packages
+
+```{r,  message = FALSE}
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(tidymodels)
+library(doParallel)
+library(prospectr)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Set year
+
+```{r}
+year_to_run = "2020"
+scoring_date = as.Date("2020-06-09")
+```
+
+
+## Load data
+
+```{r}
+scores <- read_csv(paste("../raw_data/scores/scores_", year_to_run, ".csv", sep = ""))
+hyperspec_full <- read_csv(paste("../pre_processing/hyperspectral/out/", year_to_run, "/raw_and_smoothed_full.csv", sep = ""))
+hyperspec_FWHM <- read_csv(paste("../pre_processing/hyperspectral/out/", year_to_run, "/FWHM_binned.csv", sep = ""))
+hyperspec_double_FWHM <- read_csv(paste("../pre_processing/hyperspectral/out/", year_to_run, "/double_FWHM_binned.csv", sep = ""))
+```
+## Preparation
+
+### EDA
+
+
+## Define functions
+
+#### Create matrix of possible modelling steps
+
+* To keep track of what models to include and compare
+* Split up VNIR, VNIR-SWIR, and FGCC in final comparison
+
+```{r}
+modelling_steps_hyperspec <- expand.grid(predictors = c("hyperspec_full","hyperspec_FWHM", "hyperspec_double_FWHM"),
+                                         smoothing = c("None", "Sav-Gol"),
+                                         dataset= c("All imaged pots","Alive pots"),
+                                         factors = c("type", "none"),
+                               response = c("Disease index"),
+                               VNIR_SWIR = c("VNIR_only", "VNIR_SWIR"),
+                               model = "PLSR",
+                               normalization = c("None", "Pu"),
+                               derivative = c("None", "First", "Second"),
+                               remove_autocorrelated = c("Cor_filter", "No_filter"))
+```
+
+## Steps for modelling
+
+* Define function to prepare each dataset for modeling = prep_data
+  * Cast data into wide format
+  * Combine with scores
+  * Define whether smoothed or non smoothed
+* Define function to run models = run_models
+  * Test-train split
+  * Pre-processing
+  * Specify recipe
+  * Fit models 
+  * Evaluate models 
+* Create dataframe to hold model metrics 
+* Create dataframe with combinations of datasets to iterate over
+  * Smoothing?
+  * VNIR only?
+  * Model?
+* Iterate over the dataframe for each dataset
+  * Function prep_dataset
+
+* Still to do:
+  * Include more models
+  * Tune LASSO parameters on bootstrapped dataset 
+
+
+### Function to prepare dataset for modeling
+
+
+```{r}
+prep_dataset <- function(dataset = hyperspec_full, 
+                         alive_only = TRUE, 
+                         response_chr = "reflectance_raw", 
+                         VNIR_only = TRUE, 
+                         set_date = as.Date("2020-06-02"),
+                         normalization = "Pu", 
+                         derivative = "None",
+                         gapDer_wl = 11,
+                         gapDer_seg = 9){
+  
+  # Combine with scores and pot ids
+  dat <- dataset |>
+    rename(imaging_date = date) |> # do not use function names as variable names
+    left_join(scores) |> 
+    dplyr::filter(imaging_date == set_date,
+           treatment != "Control") |> 
+    rename(pot = id_tag)
+  
+  try(dat <- dat |> rename(wavelength = wavelength_bin)) # Rename var for the binned datasets
+  
+  # Subset
+  if(alive_only == TRUE){
+    dat <- dat |> filter(di < 100)
+  }else{
+    dat <- dat
+  }
+  if(VNIR_only == TRUE){
+    dat <- dat |>  filter(camera == "VNIR")
+  }else{
+    dat <- dat
+  }
+  
+  # Pre-processing
+  
+  ## Normalization
+  if(normalization == "Pu"){
+    pots <- unique(dat$pot)
+    pot_summary <- data.frame(pot = character(),
+                              avg_ref_per_curve = numeric())
+    for(p in pots){ # Summarizing reflectance per pot
+      pot_subset <- dat[dat$pot == p,]
+      list_of_response <- pot_subset |> pull(response_chr)
+      pot_mean <- mean(list_of_response, na.rm = TRUE)
+      p_summary <- data.frame(pot = p, avg_ref_per_curve = as.numeric(pot_mean))
+      
+      pot_summary <- rbind(pot_summary, p_summary)
+    }
+    dat <- dat |> 
+      left_join(pot_summary) 
+    response_num <- dat |> pull(response_chr)
+    
+    dat$response <- response_num/dat$avg_ref_per_curve
+  }else if(normalization == "None"){
+    dat <- dat
+    dat$response <- dat |> pull(response_chr)
+  }else{
+    dat <- dat
+    dat$response <- dat |> pull(response_chr)
+  }
+  
+  
+  ## Calculate derivatives 
+  
+  # Cast wide
+  dat <- dat |>  
+    pivot_wider(id_cols = c(pot, di), values_from = response, 
+                names_from = wavelength,values_fn = mean)
+  
+  # Calculate lagged Differences (derivatives), adjust lag depending on binning
+  if(derivative == "None"){
+    dat <- dat
+    
+  }else if(derivative == "First"){
+    hyper_mat <- as.matrix(dat[ , !names(dat) %in% c("pot","di")])
+    hyper_id <- as.matrix(dat[ , names(dat) %in% c("pot","di")])
+    
+    gds1 <- gapDer(X = hyper_mat, m = 1, w = gapDer_wl, s = gapDer_seg)
+
+    dat <- data.frame(hyper_id, gds1, check.names = FALSE)
+    dat$di <- as.numeric(dat$di)
+    
+  }else if(derivative == "Second"){
+    hyper_mat <- as.matrix(dat[ , !names(dat) %in% c("pot","di")])
+    hyper_id <- as.matrix(dat[ , names(dat) %in% c("pot","di")])
+    
+    gds2 <- gapDer(X = hyper_mat, m = 2, w = gapDer_wl, s = gapDer_seg)
+    
+    dat <- data.frame(hyper_id, gds2, check.names = FALSE)
+    dat$di <- as.numeric(dat$di)
+    
+  }else{
+    stop('Derivative needs to be "None", "First", or "Second"')
+  }
+  return(dat)
+}
+```
+
+## vfold_CV
+
+
+### Set seed, amount of folds and repeats
+
+```{r}
+seed <- 123
+n_folds <- 5
+n_repeats <- 5
+```
+
+#### Build iterator
+
+```{r}
+# Without derivatives, (includes smoothed reflectance)
+dataset_iterator_no_der <- expand.grid(imaging_date = scoring_date,
+                                       alive_only = c(TRUE), 
+                                       response_chr = c("reflectance_raw", "reflectance_smoothed"), 
+                                       VNIR_only = c(TRUE, FALSE), 
+                                       normalization = c("Pu", "None"), 
+                                       derivative = c("None"),
+                                       stringsAsFactors = FALSE)
+
+# Derivatives (does not include smoothed reflectance because smoothing is included in gapDer function)
+dataset_iterator_derivatives <- expand.grid(imaging_date = scoring_date,
+                                            alive_only = c(TRUE), 
+                                            response_chr = c("reflectance_raw"), 
+                                            VNIR_only = c(TRUE, FALSE), 
+                                            normalization = c("Pu", "None"), 
+                                            derivative = c("First", "Second"),
+                                            stringsAsFactors = FALSE)
+
+dataset_iterator <- rbind(dataset_iterator_no_der, dataset_iterator_derivatives)
+```
+### Create empty dataframe to hold model metrics
+
+
+```{r}
+cv_metrics_out_template <- data.frame(id = character(),
+                                      id2 = character(),
+                                  .metric = character(),
+                                  .estimator = character(),
+                                  .estimate = numeric(),
+                                  .config = character(),
+                                  alive_only = logical(),
+                                  response = character(),
+                                  VNIR_only = logical(),
+                                  model = character(),
+                                  normalization = character(),
+                                  imaging_date = character(),
+                                  derivative = character())
+
+```
+
+### Create function
+
+
+```{r}
+run_cv <- function(input = prep_dat_out, output, cv_folds = n_folds, cv_repeats = n_repeats, random_seed = seed){
+  
+  # Sample folds
+  set.seed(random_seed)
+  folds_for_cv <- vfold_cv(input, v = cv_folds, repeats = cv_repeats, strata = di)
+  
+  
+  # Pre-processing steps
+  ref_recipe <- recipe((di ~ .), 
+                       data = dat_for_cv)  |>
+    update_role(pot, new_role = "ID") |> 
+    step_center(all_predictors()) |>
+    step_scale(all_predictors()) |>
+    step_zv(all_predictors()) 
+  
+  pls_recipe <- ref_recipe |> # No removal of auto-correlated variables for PLSR! Dimensionality reduction is the whole point of the algorithm 
+    step_pls(all_predictors(), outcome = "di", num_comp = 6)
+  
+  # Select model engines
+  linreg_spec <- linear_reg() |> # For PLSR
+    set_engine("lm")
+  
+  svm_spec <- svm_rbf(cost = 50) |> 
+    set_engine("kernlab") |> 
+    set_mode("regression") |> 
+    translate()
+  
+  rf_spec <- rand_forest() |> 
+    set_engine("ranger") |> 
+    set_mode("regression") |> 
+    translate()
+  
+  # Build workflows
+  pls_workflow <- workflow() |>
+    add_model(linreg_spec) |>
+    add_recipe(pls_recipe)
+  
+  svm_wf <- workflow() |> 
+    add_model(svm_spec) |> 
+    add_recipe(ref_recipe)
+  
+  rf_wf <- workflow() |> 
+    add_model(rf_spec) |> 
+    add_recipe(ref_recipe)
+  
+  
+  # Fit resamples
+  plsr_fits <- pls_workflow |> fit_resamples(folds_for_cv)
+  svm_fits <- svm_wf |> fit_resamples(folds_for_cv)
+  rf_fits <- rf_wf |> fit_resamples(folds_for_cv)
+
+  plsr_metrics <- plsr_fits |>
+    collect_metrics(summarize = FALSE) |>
+    mutate(model = "PLSR")
+
+  svm_metrics <- svm_fits |>
+    collect_metrics(summarize = FALSE) |>
+    mutate(model = "SVM")
+
+  rf_metrics <- rf_fits |> 
+    collect_metrics(summarize = FALSE) |>
+    mutate(model = "RF")
+
+  metrics <- plsr_metrics |>
+    bind_rows(svm_metrics) |>
+    bind_rows(rf_metrics)
+
+  
+  metrics$alive_only <- dataset_iterator$alive_only[i]
+  metrics$response <- dataset_iterator$response_chr[i]
+  metrics$VNIR_only <- dataset_iterator$VNIR_only[i]
+  metrics$normalization <- dataset_iterator$normalization[i]
+  metrics$derivative <- dataset_iterator$derivative[i]
+  metrics$imaging_date <- dataset_iterator$imaging_date[i]
+  output <- rbind(output, metrics)
+  return(output)
+}
+```
+
+
+### Set up parallel processing
+```{r}
+all_cores <- parallel::detectCores(logical = FALSE)
+
+library(doParallel)
+cl <- makePSOCKcluster(all_cores)
+registerDoParallel(cl)
+clusterEvalQ(cl, .libPaths("C:/R-packages2/"))
+```
+
+
+### Double FWHM CV
+
+```{r, warning = FALSE, message = FALSE}
+double_FWHM_cv_metrics <- cv_metrics_out_template
+
+
+for(i in 1:nrow(dataset_iterator)){
+  dat_for_cv <- prep_dataset(dataset = hyperspec_double_FWHM,
+                      alive_only = dataset_iterator$alive_only[i],
+                      response = dataset_iterator$response[i],
+                      VNIR_only = dataset_iterator$VNIR_only[i],
+                      set_date = dataset_iterator$imaging_date[i],
+                      normalization = dataset_iterator$normalization[i],
+                      derivative = dataset_iterator$derivative[i])
+  output <- run_cv(input = dat_for_cv, 
+                       output = cv_metrics_out_template,
+                       random_seed = seed)
+  try(double_FWHM_cv_metrics <- rbind(double_FWHM_cv_metrics, output))
+}
+
+double_FWHM_cv_metrics$dataset <- "Double FWHM binned"
+```
+
+
+
+### FWHM CV
+
+```{r, warning = FALSE, echo = FALSE}
+FWHM_cv_metrics <- cv_metrics_out_template
+
+
+for(i in 1:nrow(dataset_iterator)){
+  dat_for_cv <- prep_dataset(dataset = hyperspec_FWHM,
+                      alive_only = dataset_iterator$alive_only[i],
+                      response = dataset_iterator$response[i],
+                      VNIR_only = dataset_iterator$VNIR_only[i],
+                      set_date = dataset_iterator$imaging_date[i],
+                      normalization = dataset_iterator$normalization[i],
+                      derivative = dataset_iterator$derivative[i])
+  output <- run_cv(input = dat_for_cv, 
+                       output = cv_metrics_out_template,
+                       random_seed = seed)
+  try(FWHM_cv_metrics <- rbind(FWHM_cv_metrics, output))
+}
+
+FWHM_cv_metrics$dataset <- "FWHM binned"
+```
+
+### Full spectrum CV
+
+```{r, warning = FALSE, echo = FALSE}
+full_cv_metrics <- cv_metrics_out_template
+
+
+for(i in 1:nrow(dataset_iterator)){
+  dat_for_cv <- prep_dataset(dataset = hyperspec_full,
+                      alive_only = dataset_iterator$alive_only[i],
+                      response = dataset_iterator$response[i],
+                      VNIR_only = dataset_iterator$VNIR_only[i],
+                      set_date = dataset_iterator$imaging_date[i],
+                      normalization = dataset_iterator$normalization[i],
+                      derivative = dataset_iterator$derivative[i])
+  output <- run_cv(input = dat_for_cv, 
+                       output = cv_metrics_out_template,
+                       random_seed = seed)
+  try(full_cv_metrics <- rbind(full_cv_metrics, output))
+}
+
+full_cv_metrics$dataset <- "Full spectrum"
+```
+
+
+## Evaluate CV
+
+* Combine CV metrics from all datasets
+
+```{r}
+cv_metrics <- double_FWHM_cv_metrics
+cv_metrics <- rbind(full_cv_metrics, FWHM_cv_metrics, double_FWHM_cv_metrics)
+
+cv_metrics$VNIR_only[cv_metrics$VNIR_only == TRUE] <- "VNIR only"
+cv_metrics$VNIR_only[cv_metrics$VNIR_only == FALSE] <- "VNIR + SWIR"
+```
+
+
+
+```{r}
+write_csv(cv_metrics, paste("out/hyperspectral_cv_metrics_", year_to_run, ".csv", sep = ""))
+```
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,440 @@
+---
+title: "Pre-processing of hyperspectral data 2020"
+author: Florian Tanner
+date: "`r format(Sys.time())`"
+output: html_document
+---
+
+
+Multiple hyperspectral image data pre-processing methods are implemented and pre-processed data is exported for predictive modeling. 
+
+## Load packages
+
+```{r}
+rm(list=ls())
+library(tidyverse)
+library(ggplot2); theme_set(theme_bw())
+library(prospectr)
+library(patchwork)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Possible reprocessing steps
+
+* Using only VNIR data vs using full spectrum data
+* Smoothing
+* Normalising SWIR reflectance to VNIR reflectance 
+  * Correcting baseline of SWIR data as both sensors measure different reflectance 
+* Binning
+
+### Load data
+
+```{r}
+hyperspec_2020 <- read_csv("../../raw_data/hyperspectral/reflectance_2020.csv")
+
+sample_date <- "2020-06-02"
+sample_id <- "080352-R3"
+```
+
+### Create matrix of possible preprocessing steps 
+
+* Adding the various dates to it
+
+```{r}
+pre_processing_steps <- expand.grid(date = c(unique(hyperspec_2020$date)),
+                                    cameras = c("VNIR", "VNIR-SWIR"),
+                                    smoothing = c("Unsmoothed", "Sav-Gol"),
+                                    binning = c("None", "FWHM", "Double FWHM"))
+```
+
+## Smoothing
+
+### Prepare data for smoothing
+
+* prospectr functions take a wide matrix, original data is in long format. SWIR and VNIR are split to accomodate for different smoothing parameters
+* One pot was imaged multiple times, therefore the reflectance is being averaged with values_fn = mean
+
+```{r}
+idcols <- c("id_tag", "date")
+hyperspec_2020$wavelength_chr <- as.character(hyperspec_2020$wavelength) # making a character version of this column to facilitate joins
+
+VNIR_wide <- hyperspec_2020 |> 
+  filter(camera == "VNIR") |> 
+  pivot_wider(id_cols = idcols, names_from = wavelength_chr, values_from = reflectance,values_fn = mean) 
+VNIR_ref_matrix <- VNIR_wide |> select(-idcols)
+VNIR_id_matrix <- VNIR_wide |> select(idcols)
+
+SWIR_wide <- hyperspec_2020 |> 
+  filter(camera == "SWIR") |> 
+  pivot_wider(id_cols = idcols, names_from = wavelength_chr, values_from = reflectance,values_fn = mean) 
+SWIR_ref_matrix <- SWIR_wide |> select(-idcols)
+SWIR_id_matrix <- SWIR_wide |> select(idcols)
+
+```
+
+
+### Choosing smoothing parameters visually
+
+* Window lengths for smoothing are flexible and are chosen here upon visual inspection of smoothed and unsmoothed reflectance
+* Creating a function to plot different smoothing parameters 
+
+```{r}
+test_savgol_param <- function(ref_matrix, 
+                              id_matrix, 
+                              poly_order = 3, 
+                              window_length = c(3,5,7,9,11,13,15,17,19),
+                              start_wavelength = 400,
+                              stop_wavelength = 1000,
+                              original_dat = VNIR_ref,
+                              select_id =  sample_id,
+                              select_date = sample_date){
+  for(wl in window_length){
+    print(paste0("Window length = ", wl, " , Polynomial order = ", poly_order))
+    smoothed_df <- cbind(as.data.frame(savitzkyGolay(ref_matrix, p = poly_order, w = wl, m = 0)), id_matrix) |> 
+      pivot_longer(cols = -idcols, names_to = "wavelength_chr",  values_to = "reflectance_smoothed")
+    smoothed_df$wavelength_chr <- as.numeric(smoothed_df$wavelength_chr)
+    s <- smoothed_df |> filter(id_tag == select_id, 
+                                date == as.Date(select_date),
+                                wavelength_chr > start_wavelength, wavelength_chr<stop_wavelength)
+    original_dat$wavelength_chr <- as.numeric(original_dat$wavelength_chr)
+    o <- original_dat |> filter(id_tag == select_id, 
+                                 date == as.Date(select_date),
+                                 wavelength_chr > start_wavelength, wavelength_chr<stop_wavelength)
+    p_smooth <- ggplot(s) +
+      geom_line(aes(x = wavelength_chr, y = reflectance_smoothed, group = id_tag), color= "red") +
+      geom_line(data = o, aes(x = wavelength_chr, y = reflectance, group = id_tag), color= "black", alpha = 0.5) +
+      labs(title = paste0("P. order = ", poly_order, " Window = ", wl), x = "Wavelength", y = "Reflectance")
+    plot(p_smooth)
+    if(length(window_length) == 1){
+      return(p_smooth)}
+    else{
+    }
+  }
+}
+```
+
+
+### Testing smoothing params from 450-550 nm
+
+* Further wavelength areas can be tested, but only one region for each camera is shown here to keep the code somewhat short. 
+
+
+```{r}
+test_savgol_param(ref_matrix = VNIR_ref_matrix, 
+                  id_matrix = VNIR_id_matrix, 
+                  window_length = c(5,7,9,13, 15, 17, 19, 21), 
+                  start_wavelength = 450,
+                  stop_wavelength = 550,
+                  original_dat = hyperspec_2020 |> filter(camera == "VNIR"))
+```
+### Testing smoothing params from 900-2600 nm
+
+```{r}
+test_savgol_param(ref_matrix = SWIR_ref_matrix, 
+                  id_matrix = SWIR_id_matrix,
+                  window_length = c(5,7,9,11,13,15),
+                  start_wavelength = 900,
+                  stop_wavelength = 2600,
+                  original_dat = hyperspec_2020 |> filter(camera == "SWIR"))
+```
+
+
+### Smoothing VNIR data
+
+
+```{r}
+VNIR_wl = 19
+VNIR_poly = 3
+VNIR_smoothed <- cbind(as.data.frame(savitzkyGolay(VNIR_ref_matrix,p = VNIR_poly, w = VNIR_wl , m = 0)), VNIR_id_matrix) |> 
+  pivot_longer(cols = -idcols, names_to = "wavelength_chr",  values_to = "Smoothed_reflectance_chosen_wl")
+
+VNIR_smoothed_out <- hyperspec_2020 |> 
+  filter(camera == "VNIR") |> 
+  left_join(VNIR_smoothed)
+```
+
+
+* Savitzky-Golay smoothing truncates the ends of the spectrum, therefore, the curve is padded with a smaller window length
+
+```{r}
+VNIR_smoothed_ends <- cbind(as.data.frame(savitzkyGolay(VNIR_ref_matrix,p = 3, w = 5 , m = 0)), VNIR_id_matrix) |> 
+  pivot_longer(cols = -idcols, names_to = "wavelength_chr",  values_to = "Smoothed_reflectance_w5")
+
+
+
+VNIR_smoothed_padded_out <- VNIR_smoothed_out |> 
+  left_join(VNIR_smoothed_ends) |>
+  mutate(Smoothed_reflectance = coalesce(Smoothed_reflectance_chosen_wl, Smoothed_reflectance_w5))
+
+```
+
+### Smoothing SWIR data
+
+```{r}
+SWIR_wl = 9
+SWIR_poly = 3
+SWIR_smoothed <- cbind(as.data.frame(savitzkyGolay(SWIR_ref_matrix,p = SWIR_poly, w = SWIR_wl , m = 0)), SWIR_id_matrix) |> 
+  pivot_longer(cols = -idcols, names_to = "wavelength_chr",  values_to = "Smoothed_reflectance_chosen_wl")
+
+SWIR_smoothed_out <- hyperspec_2020 |> 
+  filter(camera == "SWIR") |> 
+  left_join(SWIR_smoothed)
+```
+
+
+* Savitzky-Golay smoothing truncates the ends of the spectrum, therefore, the curve is padded with a smaller window length
+
+```{r}
+SWIR_smoothed_ends <- cbind(as.data.frame(savitzkyGolay(SWIR_ref_matrix,p = 3, w = 5 , m = 0)), SWIR_id_matrix) |> 
+  pivot_longer(cols = -idcols, names_to = "wavelength_chr",  values_to = "Smoothed_reflectance_w5")
+
+
+
+SWIR_smoothed_padded_out <- SWIR_smoothed_out |> 
+  left_join(SWIR_smoothed_ends) |>
+  mutate(Smoothed_reflectance = coalesce(Smoothed_reflectance_chosen_wl, Smoothed_reflectance_w5))
+
+```
+### Joining smoothed VNIR and SWIR data again
+
+```{r}
+smoothed_hyperspec_2020 <- VNIR_smoothed_padded_out |> 
+  rename(reflectance_raw = reflectance, reflectance_smoothed = Smoothed_reflectance) |> 
+  select(-Smoothed_reflectance_chosen_wl, -Smoothed_reflectance_w5, -wavelength_chr) |> 
+  janitor::clean_names() |> 
+  bind_rows(SWIR_smoothed_padded_out |> 
+              rename(reflectance_raw = reflectance, reflectance_smoothed = Smoothed_reflectance) |> 
+              select(-Smoothed_reflectance_chosen_wl, -Smoothed_reflectance_w5)|> 
+              janitor::clean_names())
+```
+
+
+## Correcting baseline of SWIR reflectance
+
+* Removing noisy ends of spectra
+
+```{r}
+VNIR_cut <- smoothed_hyperspec_2020 |> filter(wavelength > 400, wavelength < 1001, camera == "VNIR")
+SWIR_cut <- smoothed_hyperspec_2020 |> filter(wavelength >1000, wavelength < 2500, camera == "SWIR")
+smoothed_hyperspec_2020_truncated <- rbind(VNIR_cut, SWIR_cut)
+```
+
+* Creating wide versions of dataframes to fit curve to last VNIR points
+  * Wider versions are easier to iterate over in a for-loop later down the line
+
+```{r}
+smoothed_wide <- smoothed_hyperspec_2020_truncated |> 
+  filter(wavelength >994, wavelength < 1001) |>
+  select(wavelength, id_tag, reflectance_smoothed, date) |> # need to add the unsmoothed reflectance here too
+  pivot_wider(names_from = wavelength, values_from = reflectance_smoothed, values_fn = mean)
+unsmoothed_wide <- smoothed_hyperspec_2020_truncated |> 
+  filter(wavelength >994, wavelength < 1001) |>
+  select(wavelength, id_tag, reflectance_raw, date) |> # need to add the unsmoothed reflectance here too
+  pivot_wider(names_from = wavelength, values_from = reflectance_raw, values_fn = mean)
+
+```
+
+* First measured SWIR wavelength in combined dataframe is at 1002.18 nm, therefore, this wavelength is predicted with fitting a curve to the last 5 measured wavelengths of the VNIR sensor (doing this both for smoothed and unsmoothed reflectance)
+
+```{r}
+first_SWIR <- 1002.18
+
+predictions_smoothed <- data.frame(id_tag = as.character(), date = as.character(), pred_1002.18_smoothed = as.numeric())
+predictions_raw <- data.frame(id_tag = as.character(), date = as.character(), pred_1002.18_raw = as.numeric())
+
+for(i in 1:nrow(smoothed_wide)){
+  dat <- pivot_longer(data = smoothed_wide[i,], cols = c(-id_tag, -date), names_to = "wavelength", values_to = "reflectance_smoothed")
+  dat$wavelength<- as.numeric(dat$wavelength)
+  dat$date <- as.Date(dat$date)
+  mod <- lm(reflectance_smoothed ~ wavelength, data = dat)
+  pred <- predict(mod, newdata = data.frame("wavelength" = first_SWIR))
+  out <- data.frame(id_tag = dat$id_tag[1], pred_1002.18_smoothed = pred, date = dat$date[1])
+  predictions_smoothed <- rbind(predictions_smoothed, out)
+}
+
+
+for(i in 1:nrow(unsmoothed_wide)){
+  dat <- pivot_longer(data = unsmoothed_wide[i,], cols = c(-id_tag, -date), names_to = "wavelength", values_to = "reflectance_raw")
+  dat$wavelength<- as.numeric(dat$wavelength)
+  dat$date <- as.Date(dat$date)
+  mod <- lm(reflectance_raw ~ wavelength, data = dat)
+  pred <- predict(mod, newdata = data.frame("wavelength" = first_SWIR))
+  out <- data.frame(id_tag = dat$id_tag[1], pred_1002.18_raw = pred, date = dat$date[1])
+  predictions_raw <- rbind(predictions_raw, out)
+}
+
+```
+
+* Applying corrections of baseline to SWIR data 
+
+```{r}
+correction_1002.18 <- smoothed_hyperspec_2020_truncated |> 
+  filter(wavelength > 1001, wavelength < 1003) |> 
+  left_join(predictions_smoothed) |>
+  left_join(predictions_raw) |> 
+  mutate(difference_smoothed = reflectance_smoothed - pred_1002.18_smoothed,
+         difference_raw = reflectance_raw - pred_1002.18_raw) |>
+  select(difference_smoothed, difference_raw, id_tag, date)
+
+SWIR_corrected <- SWIR_cut |>
+  left_join(correction_1002.18) |>
+  mutate(reflectance_smoothed_corrected = reflectance_smoothed - difference_smoothed,
+         reflectance_raw_corrected = reflectance_raw - difference_raw)
+```
+* Rejoining VNIR and corrected SWIR data
+
+```{r}
+VNIR_cut$difference_smoothed <- NA
+VNIR_cut$difference_raw <- NA
+VNIR_cut$reflectance_smoothed_corrected <- VNIR_cut$reflectance_smoothed
+VNIR_cut$reflectance_raw_corrected <- VNIR_cut$reflectance_raw
+
+corrected_hyperspec_2020 <- VNIR_cut |> 
+  bind_rows(SWIR_corrected) |> 
+  select(-reflectance_raw,
+         -reflectance_smoothed,
+         -wavelength_chr,
+         -difference_smoothed,
+         -difference_raw) |> 
+  rename(reflectance_raw= reflectance_raw_corrected,
+         reflectance_smoothed = reflectance_smoothed_corrected)
+```
+
+
+## Binning
+
+* First off, casting dataframes into wider form once more 
+
+```{r}
+corrected_smoothed_wide <- corrected_hyperspec_2020 |>  
+  select(c(id_tag, wavelength, reflectance_smoothed, camera, date)) |>
+  pivot_wider(names_from = wavelength, 
+              values_from = reflectance_smoothed,
+              values_fn = mean) 
+head(colnames(corrected_smoothed_wide))
+
+corrected_raw_wide <- corrected_hyperspec_2020 |>  
+  select(c(id_tag, wavelength, reflectance_raw, camera, date)) |>
+  pivot_wider(names_from = wavelength, 
+              values_from = reflectance_raw,
+              values_fn = mean) 
+```
+
+* Creating matrices with reflectance data only 
+
+```{r}
+id_cols <- c("id_tag", "camera", "date")
+
+corrected_smooth_matrix <- corrected_smoothed_wide |> select(-id_cols) |>  as.matrix()
+corrected_raw_matrix <- corrected_raw_wide |> select(-id_cols) |>  as.matrix()
+
+id_only <- corrected_smoothed_wide |> select(id_cols)
+```
+
+
+* Calculating number of bins for each sensor as Full width at half maximum (FWHM) is different 
+
+```{r}
+FWHM_NIR <- 5.5
+FWHM_SWIR <- 12
+n_bin_VNIR <- round((1000-400)/(FWHM_NIR))
+n_bin_SWIR <- round((2500-1000)/(FWHM_SWIR))
+```
+
+* Splitting up VNIR and SWIR
+
+```{r}
+VNIR_smooth_ref_only <- corrected_smooth_matrix[,1:442]
+SWIR_smooth_ref_only  <- corrected_smooth_matrix[,442:710]
+
+VNIR_raw_ref_only <- corrected_raw_matrix[,1:442]
+SWIR_raw_ref_only  <- corrected_raw_matrix[,442:710]
+```
+
+### Binning at FWHM
+
+
+* Smoothed
+
+```{r}
+VNIR_smooth_binned_FWHM <- as.data.frame(binning(VNIR_smooth_ref_only, bins = n_bin_VNIR)) |> 
+  bind_cols(id_only)
+FWHM_smooth_binned <- as.data.frame(binning(SWIR_smooth_ref_only, bins = n_bin_SWIR)) |> 
+  bind_cols(VNIR_smooth_binned_FWHM) |> 
+  pivot_longer(cols = -id_cols, names_to = "wavelength_bin",
+               values_to="reflectance_smoothed") |> 
+  filter(!is.na(reflectance_smoothed))
+```
+
+* Raw
+
+```{r}
+VNIR_raw_binned_FWHM <- as.data.frame(binning(VNIR_raw_ref_only, bins = n_bin_VNIR)) |> 
+  bind_cols(id_only)
+FWHM_raw_binned <- as.data.frame(binning(SWIR_raw_ref_only, bins = n_bin_SWIR)) |> 
+  bind_cols(VNIR_raw_binned_FWHM) |> 
+  pivot_longer(cols = -id_cols, names_to = "wavelength_bin",
+               values_to="reflectance_raw") |> 
+  filter(!is.na(reflectance_raw))
+```
+
+* Combine
+
+```{r}
+FWHM_binned <- FWHM_smooth_binned |> 
+  left_join(FWHM_raw_binned) |> 
+  mutate(wavelength_bin = as.numeric(wavelength_bin))
+```
+
+### Binning at double FWHM
+
+* Smoothed
+
+```{r}
+VNIR_smooth_binned_double_FWHM <- as.data.frame(binning(VNIR_smooth_ref_only, bins = n_bin_VNIR/2)) |> 
+  bind_cols(id_only)
+double_FWHM_smooth_binned <- as.data.frame(binning(SWIR_smooth_ref_only, bins = n_bin_SWIR/2)) |> 
+  bind_cols(VNIR_smooth_binned_double_FWHM) |> 
+  pivot_longer(cols = -id_cols, names_to = "wavelength_bin",
+               values_to="reflectance_smoothed") |> 
+  filter(!is.na(reflectance_smoothed))
+```
+
+* Raw
+
+```{r}
+VNIR_raw_binned_double_FWHM <- as.data.frame(binning(VNIR_raw_ref_only, bins = n_bin_VNIR/2)) |> 
+  bind_cols(id_only)
+double_FWHM_raw_binned <- as.data.frame(binning(SWIR_raw_ref_only, bins = n_bin_SWIR/2)) |> 
+  bind_cols(VNIR_raw_binned_double_FWHM) |> 
+  pivot_longer(cols = -id_cols, names_to = "wavelength_bin",
+               values_to="reflectance_raw") |> 
+  filter(!is.na(reflectance_raw))
+```
+
+* Combine
+
+```{r}
+double_FWHM_binned <- double_FWHM_smooth_binned |> 
+  left_join(double_FWHM_raw_binned) |> 
+  mutate(wavelength_bin = as.numeric(wavelength_bin))
+```
+
+## Exporting results for predictive modelling
+
+```{r}
+write_csv(corrected_hyperspec_2020, "out/2020/raw_and_smoothed_full.csv")
+write_csv(FWHM_binned, "out/2020/FWHM_binned.csv")
+write_csv(double_FWHM_binned, "out/2020/double_FWHM_binned.csv")
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
