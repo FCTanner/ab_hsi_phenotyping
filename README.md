@@ -17,6 +17,7 @@ Code and data underlying <mark>thesis chapter in:</mark>
 	* [Average foreground reflectance](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/hyperspectral)
 
 - Processing methods
+	* [Methods for calibration and segmentation of raw hyperspectral data](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/pre_processing/hyperspectral_segmentation)
 	* [Hyperspectral data preprocessing](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/pre_processing/hyperspectral)
 	* [Processing PSA](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/eda)
 
