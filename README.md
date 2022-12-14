@@ -1,4 +1,4 @@
-# ab_hyper_methods
+# ab_hsi_phenotyping
 Methods for processing of data acquired in automated high-throughput phenotyping system at 
 [The Plant Accelerator®](https://plantphenomics.org.au/services/accelerator/)
 
