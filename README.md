@@ -4,15 +4,14 @@ Methods for processing of data acquired in automated high-throughput phenotyping
 
 ## Description
 
-Code and data underlying ==thesis chapter in:== 
-
+Code and data underlying <mark>thesis chapter in:</mark>
 ## Getting started
 
 ### Contents
 
 - Raw data
-	* Raw RGB image data ==available via Pawsey ==
-	* Raw hyperspectral data ==available via Pawsey==
+	* Raw RGB image data <mark>available via Pawsey</mark>
+	* Raw hyperspectral data <mark>available via Pawsey</mark>
 	* [Extracted trait data from LemnaTec system](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/lemnatec)
 	* [Visual scores](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/scores)
 	* [Average foreground reflectance](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/hyperspectral)
