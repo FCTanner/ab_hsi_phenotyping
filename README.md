@@ -10,8 +10,7 @@ Code and data underlying <mark>thesis chapter in:</mark>
 ### Contents
 
 - Raw data
-	* Raw RGB image data <mark>available via Pawsey</mark>
-	* Raw hyperspectral data <mark>available via Pawsey</mark>
+	* Raw image data available via Pawsey [2020](https://projects.pawsey.org.au/appf-tpa-0521-ph-ua-tpa-tanner-chickpea/index.html) [2021](https://projects.pawsey.org.au/appf-tpa-0588-ph-ua-tpa-tanner-chickpea/index.html)
 	* [Extracted trait data from LemnaTec system](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/lemnatec)
 	* [Visual scores](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/scores)
 	* [Average foreground reflectance](https://github.com/FCTanner/ab_hsi_phenotyping/tree/main/raw_data/hyperspectral)
