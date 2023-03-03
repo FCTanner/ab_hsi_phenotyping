@@ -25,6 +25,7 @@ library(tidyverse)
 library(ggplot2); theme_set(theme_bw())
 library(tidymodels)
 library(prospectr)
+library(gt)
 ```
 
 
@@ -293,10 +294,20 @@ rf_fit_2020_2DAI_2020 <- rf_wf_2DAI_2020 |> fit(data_2020_2dai_best_process_2020
 ### Evaluate on 2021 data
 
 ```{r}
-predict(rf_fit_2020_2DAI_2020, data_2021_2dai_best_process_2020) |> 
+preds_2021_2dai <- predict(rf_fit_2020_2DAI_2020, data_2021_2dai_best_process_2020) |> 
   bind_cols(data_2021_2dai_best_process_2020$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2)) 
+
+preds_2021_2dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2021_2dai <- preds_2021_2dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2021,
+         predicted_dai= 2)
 ```
 
 ### 6DAI
@@ -318,10 +329,20 @@ svm_fit_2020_6DAI_2020 <- svm_wf_6DAI_2020 |> fit(data_2020_6dai_best_process_20
 ```
 
 ```{r}
-predict(svm_fit_2020_6DAI_2020, data_2021_6dai_best_process_2020) |> 
+preds_2021_6dai <- predict(svm_fit_2020_6DAI_2020, data_2021_6dai_best_process_2020) |> 
   bind_cols(data_2021_6dai_best_process_2020$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2))
+
+preds_2021_6dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2021_6dai <- preds_2021_6dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2021,
+         predicted_dai= 6)
 ```
 
 ### 13DAI
@@ -343,10 +364,20 @@ svm_fit_2020_13DAI_2020 <- svm_wf_13DAI_2020 |> fit(data_2020_13dai_best_process
 ```
 
 ```{r}
-predict(svm_fit_2020_13DAI_2020, data_2021_13dai_best_process_2020) |> 
+preds_2021_13dai <- predict(svm_fit_2020_13DAI_2020, data_2021_13dai_best_process_2020) |> 
   bind_cols(data_2021_13dai_best_process_2020$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2)) 
+
+preds_2021_13dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2021_13dai <- preds_2021_13dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2021,
+         predicted_dai= 13)
 ```
 
 ### 21 DAI
@@ -368,10 +399,20 @@ svm_fit_2020_21DAI_2020 <- svm_wf_21DAI_2020 |> fit(data_2020_21dai_best_process
 ```
 
 ```{r}
-predict(svm_fit_2020_21DAI_2020, data_2021_21dai_best_process_2020) |> 
+preds_2021_21dai <- predict(svm_fit_2020_21DAI_2020, data_2021_21dai_best_process_2020) |> 
   bind_cols(data_2021_21dai_best_process_2020$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2)) 
+
+preds_2021_21dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2021_21dai <- preds_2021_21dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2021,
+         predicted_dai= 21)
 ```
 
 # Evaluate 2021 algorithms on 2020 data
@@ -503,10 +544,20 @@ svm_fit_2021_2DAI_2021 <-svm_wf_2DAI_2021 |> fit(data_2021_2dai_best_process_202
 
 
 ```{r}
-predict(svm_fit_2021_2DAI_2021, data_2020_2dai_best_process_2021) |> 
+preds_2020_2dai <- predict(svm_fit_2021_2DAI_2021, data_2020_2dai_best_process_2021) |> 
   bind_cols(data_2020_2dai_best_process_2021$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2))
+
+preds_2020_2dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2020_2dai <- preds_2020_2dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2020,
+         predicted_dai= 2)
 ```
 
 ### 6DAI
@@ -528,10 +579,20 @@ svm_fit_2021_6DAI_2021 <- svm_wf_6DAI_2021 |> fit(data_2021_6dai_best_process_20
 ```
 
 ```{r}
-predict(svm_fit_2021_6DAI_2021, data_2020_6dai_best_process_2021) |> 
+preds_2020_6dai <- predict(svm_fit_2021_6DAI_2021, data_2020_6dai_best_process_2021) |> 
   bind_cols(data_2020_6dai_best_process_2021$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2))
+
+preds_2020_6dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2020_6dai <- preds_2020_6dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2020,
+         predicted_dai= 6)
 ```
 
 ### 13DAI
@@ -553,10 +614,20 @@ svm_fit_2021_13DAI_2021 <- svm_wf_13DAI_2021 |> fit(data_2021_13dai_best_process
 ```
 
 ```{r}
-predict(svm_fit_2021_13DAI_2021, data_2020_13dai_best_process_2021) |> 
+preds_2020_13dai <- predict(svm_fit_2021_13DAI_2021, data_2020_13dai_best_process_2021) |> 
   bind_cols(data_2020_13dai_best_process_2021$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2)) 
+
+preds_2020_13dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2020_13dai <- preds_2020_13dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2020,
+         predicted_dai= 13)
 ```
 
 ### 21 DAI
@@ -578,11 +649,50 @@ svm_fit_2021_21DAI_2021 <- svm_wf_21DAI_2021 |> fit(data_2021_21dai_best_process
 ```
 
 ```{r}
-predict(svm_fit_2021_21DAI_2021, data_2020_21dai_best_process_2021) |> 
+preds_2020_21dai <- predict(svm_fit_2021_21DAI_2021, data_2020_21dai_best_process_2021) |> 
   bind_cols(data_2020_21dai_best_process_2021$treatment) |> 
-  mutate(truth = as.factor(...2)) |> 
+  mutate(truth = as.factor(...2)) 
+
+preds_2020_21dai |> 
   accuracy(truth = truth, estimate = .pred_class)
+
+conf_mat_2020_21dai <- preds_2020_21dai %>% 
+  conf_mat(truth = truth, estimate = .pred_class) %>% 
+  tidy() %>% 
+  mutate(prediction = rep(c("Infected", "Control"), 2),
+         truth = c(rep("Infected", 2), rep("Control", 2)),
+         predicted_year = 2020,
+         predicted_dai= 21)
 ```
+
+# Combine confusion matrices
+
+```{r}
+conf_mats_pred_2020 <- rbind(conf_mat_2020_2dai, conf_mat_2020_6dai, conf_mat_2020_13dai, conf_mat_2020_21dai)
+conf_mats_pred_2021 <- rbind(conf_mat_2021_2dai, conf_mat_2021_6dai, conf_mat_2021_13dai, conf_mat_2021_21dai)
+```
+
+## Predictions 2020
+
+```{r}
+conf_mats_pred_2020 %>% 
+  select(-name, -predicted_year) %>% 
+  group_by(predicted_dai) %>% 
+  pivot_wider(names_from = truth, values_from = value) %>% 
+  gt()
+```
+
+
+## Predictions 2021
+
+```{r}
+conf_mats_pred_2021 %>% 
+  select(-name, -predicted_year) %>% 
+  group_by(predicted_dai) %>% 
+  pivot_wider(names_from = truth, values_from = value) %>% 
+  gt()
+```
+
 
 ```{r}
 sessionInfo()
