@@ -62,17 +62,17 @@ hyper_metrics_clean <- hyper_metrics_2020 |>
          sorting_hat = str_c(study,  VNIR_only, dataset, sep = " ")) |> 
   group_by(grouping, .metric)  |> 
   summarise(mean_metric = round(mean(.estimate), 2),
-         sd_metric  = round(sd(.estimate), 2),
-         n_cv_folds = n(), # Checking that 25 folds exist
-         study = study,
-         dataset = dataset,
-         response = response,
-         VNIR_only = VNIR_only,
-         sorting_hat = sorting_hat,
-         description = description,
-         normalization = normalization, 
-         derivative = derivative,
-         model = model) |>
+            sd_metric  = round(sd(.estimate), 2),
+            n_cv_folds = n(), # Checking that 25 folds exist
+            study = study,
+            dataset = dataset,
+            response = response,
+            VNIR_only = VNIR_only,
+            sorting_hat = sorting_hat,
+            description = description,
+            normalization = normalization, 
+            derivative = derivative,
+            model = model) |>
   distinct() |> 
   ungroup() |> 
   pivot_wider(values_from = c(mean_metric, sd_metric), names_from = .metric) |> 
@@ -129,17 +129,17 @@ pred_metrics_2021 <- final_predictions_2021 |>
   metrics(truth = di.x, estimate = rf_pred) |> 
   mutate(model = "RGB Random Forest") |> 
   bind_rows(final_predictions_2021 |> 
-  metrics(truth = di.x, estimate = linreg_pred) |> 
-  mutate(model = "RGB Linear Regression")) |> 
+              metrics(truth = di.x, estimate = linreg_pred) |> 
+              mutate(model = "RGB Linear Regression")) |> 
   bind_rows(final_predictions_2021 |> 
-  metrics(truth = di.x, estimate = hyper_rf_pred) |> 
-  mutate(model = "Hyperspectral Random Forest")) |> 
+              metrics(truth = di.x, estimate = hyper_rf_pred) |> 
+              mutate(model = "Hyperspectral Random Forest")) |> 
   filter(.metric != "mae") |> 
   mutate(.estimate = round(.estimate, 2),
          .metric = toupper(.metric)) |> 
   pivot_wider(values_from= .estimate, names_from = .metric, id_cols = -.estimator) |> 
   rename(Model = model) 
-  
+
 pred_metrics_2021 |> 
   gt() |> 
   gtsave("out/table/final_fit_2021_metrics.tex")
@@ -159,17 +159,17 @@ pred_metrics_2020 <- final_predictions_2020 |>
   metrics(truth = di.x, estimate = rf_pred) |> 
   mutate(model = "RGB Random Forest") |> 
   bind_rows(final_predictions_2020 |> 
-  metrics(truth = di.x, estimate = linreg_pred) |> 
-  mutate(model = "RGB Linear Regression")) |> 
+              metrics(truth = di.x, estimate = linreg_pred) |> 
+              mutate(model = "RGB Linear Regression")) |> 
   bind_rows(final_predictions_2020 |> 
-  metrics(truth = di.x, estimate = hyper_plsr_pred) |> 
-  mutate(model = "Hyperspectral PLSR")) |> 
+              metrics(truth = di.x, estimate = hyper_plsr_pred) |> 
+              mutate(model = "Hyperspectral PLSR")) |> 
   filter(.metric != "mae") |> 
   mutate(.estimate = round(.estimate, 2),
          .metric = toupper(.metric)) |> 
   pivot_wider(values_from= .estimate, names_from = .metric, id_cols = -.estimator) |> 
   rename(Model = model) 
-  
+
 pred_metrics_2020 |> 
   gt() |> 
   gtsave("out/table/final_fit_2020_metrics.tex")
@@ -192,7 +192,8 @@ p_hyper_rf_2021 <- final_predictions_2021 |>
   labs(x = "True Disease Index", y = "Predicted index\nBest hyperspectral algorithm") +
   scale_y_continuous(limits = c(0, 80)) +
   scale_x_continuous(limits = c(0,80)) +
-  annotate(geom = "text", x = 10, y = 70, label = "RMSE = 21.08\nRsq = 0.02", hjust = 0) 
+  ggtext::geom_richtext(aes(x = 10, y = 70, label = "RMSE = 21.08<br>R<sup>2</sup> = 0.02"), 
+                        label.color = NA, hjust = 0, size = 3.5, lineheight = 1.5)
 
 p_hyper_rf_2021
 ```
@@ -204,7 +205,8 @@ p_rgb_rf_2021 <- final_predictions_2021 |>
   labs(x = "True Disease Index", y = "Predicted index\nRGB random forest model") +
   scale_y_continuous(limits = c(0, 80)) +
   scale_x_continuous(limits = c(0,80))+
-  annotate(geom = "text", x = 10, y = 70, label = "RMSE = 19.21\nRsq = 0.30", hjust = 0) 
+  ggtext::geom_richtext(aes(x = 10, y = 70, label = "RMSE = 19.21<br>R<sup>2</sup> = 0.30"), 
+                        label.color = NA, hjust = 0, size = 3.5, lineheight = 1.5)
 
 p_rgb_rf_2021
 ```
@@ -215,7 +217,8 @@ p_rgb_linreg_2021 <- final_predictions_2021 |>
   labs(x = "True Disease Index", y = "Predicted index\nRGB linear regression model") +
   scale_y_continuous(limits = c(0, 80)) +
   scale_x_continuous(limits = c(0,80))+
-  annotate(geom = "text", x = 10, y = 70, label = "RMSE = 12.43\nRsq = 0.64", hjust = 0) 
+  ggtext::geom_richtext(aes(x = 10, y = 70, label = "RMSE = 12.43<br>R<sup>2</sup> = 0.64"), 
+                        label.color = NA, hjust = 0, size = 3.5, lineheight = 1.5)
 
 p_rgb_linreg_2021
 
@@ -239,7 +242,8 @@ p_hyper_plsr_2020 <- final_predictions_2020 |>
   labs(x = "True Disease Index", y = "Predicted index\nBest hyperspectral algorithm") +
   scale_y_continuous(limits = c(0, 30)) +
   scale_x_continuous(limits = c(0,30)) +
-  annotate(geom = "text", x =  3.75, y = 26.25, label = "RMSE = 8.08\nRsq = 0.00", hjust = 0) 
+  ggtext::geom_richtext(aes(x = 3.75, y = 26.25, label = "RMSE = 8.08<br>R<sup>2</sup> = 0.00"),
+                        hjust = 0, label.color = NA, size = 3.5, lineheight = 1.5)
 
 p_hyper_plsr_2020
 ```
@@ -251,7 +255,8 @@ p_rgb_rf_2020 <- final_predictions_2020 |>
   labs(x = "True Disease Index", y = "Predicted index\nRGB random forest model") +
   scale_y_continuous(limits = c(0, 30)) +
   scale_x_continuous(limits = c(0,30))+
-  annotate(geom = "text", x =  3.75, y = 26.25, label = "RMSE = 7.12\nRsq = 0.12", hjust = 0) 
+  ggtext::geom_richtext(aes(x = 3.75, y = 26.25, label = "RMSE = 7.12<br>R<sup>2</sup> = 0.12", 
+                            hjust = 0), label.color = NA, size =3.5, lineheight = 1.5)
 
 p_rgb_rf_2020
 ```
@@ -262,7 +267,8 @@ p_rgb_linreg_2020 <- final_predictions_2020 |>
   labs(x = "True Disease Index", y = "Predicted index\nRGB linear regression model") +
   scale_y_continuous(limits = c(0, 30)) +
   scale_x_continuous(limits = c(0,30))+
-  annotate(geom = "text", x =  3.75, y = 26.25, label = "RMSE = 5.99\nRsq = 0.37", hjust = 0) 
+    ggtext::geom_richtext(aes(x = 3.75, y = 26.25, label = "RMSE = 5.99<br>R<sup>2</sup> = 0.37", 
+                              hjust = 0), label.color = NA, size = 3.5, lineheight = 1.5)
 
 p_rgb_linreg_2020
 ```
